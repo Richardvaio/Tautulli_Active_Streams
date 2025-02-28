@@ -57,7 +57,7 @@ data:
 ```
 ---
 ### 2️⃣ Kill Streams for a Specific Session
-Call the service for a specific user:
+Call the service for a specific session_id:
 
 ```
 service: tautulli_active_streams.kill_session_stream

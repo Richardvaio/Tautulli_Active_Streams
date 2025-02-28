@@ -5,6 +5,7 @@ from homeassistant.const import STATE_OFF, CONF_URL, CONF_API_KEY, CONF_VERIFY_S
 from homeassistant.helpers.entity import EntityCategory
 from .const import DOMAIN, DEFAULT_SESSION_COUNT
 from homeassistant.components.sensor import SensorStateClass, SensorDeviceClass
+from datetime import datetime, timedelta
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -137,6 +138,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 else:
                     formatted_duration = None
                     
+                # Calculate remaining time
                 if session.get("view_offset"):
                     remain_total_ms = float(session.get("stream_duration")) - float(session.get("view_offset"))
                     remain_total_seconds = remain_total_ms / 1000  # convert milliseconds to seconds
@@ -144,8 +146,13 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                     remain_minutes = int((remain_total_seconds % 3600) // 60)
                     remain_seconds = int(remain_total_seconds % 60)
                     formatted_remaining = f"{remain_hours}:{remain_minutes:02d}:{remain_seconds:02d}"
+
+                    # Calculate ETA
+                    eta = datetime.now() + timedelta(seconds=remain_total_seconds)
+                    formatted_eta = eta.strftime("%I:%M %p").lower()
                 else:
                     formatted_remaining = None
+                    formatted_eta = None
                 
                 attributes.update({
                     # Additional keys fetched from the session
