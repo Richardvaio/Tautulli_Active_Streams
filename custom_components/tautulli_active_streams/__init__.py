@@ -397,21 +397,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
     hass.data.setdefault(DOMAIN, {})
 
+    # 1) Create TautulliAPI object
     url = entry.data.get(CONF_URL)
     api_key = entry.data.get(CONF_API_KEY)
     verify_ssl = entry.data.get(CONF_VERIFY_SSL, True)
     session = async_get_clientsession(hass, verify_ssl=verify_ssl)
     api = TautulliAPI(url, api_key, session, verify_ssl)
 
-    # For serving images
-    hass.data["tautulli_integration_config"] = {"base_url": url, "api_key": api_key}
-    hass.http.register_view(TautulliImageView)
-
-    # Pull intervals from user options
+    # 2) Build your session + history coordinators
     session_interval = entry.options.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
     stats_interval = entry.options.get(CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL)
 
-    # Create both coordinators
     sessions_coordinator = TautulliSessionsCoordinator(
         hass=hass,
         logger=_LOGGER,
@@ -419,6 +415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=session_interval),
         config_entry=entry
     )
+
     history_coordinator = TautulliHistoryCoordinator(
         hass=hass,
         logger=_LOGGER,
@@ -427,19 +424,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         config_entry=entry
     )
 
-    # Do the first refresh
+    # 3) Do first refresh
     await sessions_coordinator.async_config_entry_first_refresh()
     await history_coordinator.async_config_entry_first_refresh()
 
-    # Store them
+    # 4) Store everything in hass.data
     hass.data[DOMAIN][entry.entry_id] = {
+        "api": api,
         "sessions_coordinator": sessions_coordinator,
         "history_coordinator": history_coordinator
     }
 
-    # Forward to sensor platform
+    # 5) Register your image view
+    hass.http.register_view(TautulliImageView)
+    # Optionally store the old "tautulli_integration_config" dict, if you still want it:
+    hass.data["tautulli_integration_config"] = {"base_url": url, "api_key": api_key}
+
+    # 6) Forward to sensor platform
     try:
-        await asyncio.shield(hass.config_entries.async_forward_entry_setups(entry, PLATFORMS))
+        await asyncio.shield(hass.config_entries.async_forward_entry_setups(entry, ["sensor"]))
     except asyncio.CancelledError:
         _LOGGER.error("Setup of sensor platforms was cancelled")
         return False
@@ -447,15 +450,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Error forwarding entry setups: %s", ex)
         return False
 
-    # Register kill-stream services (only once, undone at unload)
+    # 7) Setup kill-stream services
     try:
         await async_setup_kill_stream_services(hass, entry, api)
     except Exception as exc:
-        _LOGGER.error("Exception during kill-stream service registration: %s", exc, exc_info=True)
+        _LOGGER.error("Exception during kill stream service registration: %s", exc, exc_info=True)
 
-    # Watch for changes
+    # 8) Listen for options changes
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     return True
+
 
 
 # ---------------------------
