@@ -2,10 +2,10 @@
     "domain": "tautulli_active_streams",
     "name": "Tautulli Active Streams",
     "documentation": "https://github.com/Richardvaio/Tautulli_Active_Streams",
-    "integration_type": "device",
+    "integration_type": "hub",
     "requirements": [],
     "dependencies": [],
     "codeowners": ["@Richardvaio"],
     "config_flow": true,
-    "version": "2.2.9.beta.1 "
+    "version": "2.3.0"
 }
