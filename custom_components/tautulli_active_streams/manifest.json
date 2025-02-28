@@ -7,5 +7,5 @@
     "dependencies": [],
     "codeowners": ["@Richardvaio"],
     "config_flow": true,
-    "version": "2.3.0"
+    "version": "2.2.9.beta.1"
 }
