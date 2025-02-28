@@ -5,33 +5,46 @@
         "title": "Tautulli Active Streams",
         "description": "To find your API key, open the Tautulli webpage and navigate to **Settings** → **Web Interface**. The API key is at the bottom of that page.\n\n**Examples of URL formats:**\n- **Local (HTTP)**: `http://192.168.0.10:8181`\n- **Remote / Reverse Proxy (HTTPS)**: `https://tautulli.example.com`\n",
         "data": {
-          "url": "Enter the full URL of your Tautulli server.",
-          "api_key": "API key (found in the Tautulli settings).",
-          "scan_interval": "How often to Refresh Active Streams? (Default: 4 seconds).",
-          "num_sensors": "Number of Sensors to create for monitoring Active Streams.",
-          "verify_ssl": "Enable SSL verification? Disable if using a self-signed certificate.",
-          "image_proxy": "Use Image Proxy? (Proxy Images via Home Assistant)",
-          "advanced_attributes": "Enable Advanced Attributes? (Include Additional Session Attributes)"
+          "server_name": "Enter a friendly name for your Tautulli server (optional).",
+          "url": "Enter the full URL of your Tautulli server (including port if necessary).",
+          "api_key": "API key (found in Tautulli settings).",
+          "verify_ssl": "Enable SSL verification? Disable if using a self-signed certificate."
+        }
+      },
+      "options": {
+        "title": "Tautulli Advanced Setup",
+        "description": "Configure how often to poll Tautulli, how many sensors to create, and whether to enable watch-history statistics.",
+        "data": {
+          "session_interval": "How often (in seconds) to refresh active streams? (Default: 4).",
+          "statistics_interval": "How often (in seconds) to refresh watch-history for statistics? (Default: 1800).",
+          "num_sensors": "Number of sensors to create for monitoring active streams.",
+          "image_proxy": "Use Image Proxy? (Proxy images via Home Assistant).",
+          "advanced_attributes": "Enable Advanced Attributes? (Extra session details).",
+          "enable_statistics": "Enable Tautulli Statistics? (Default 30 days history)."
         }
       }
     }
   },
+
   "options": {
     "step": {
       "init": {
         "title": "Tautulli Active Streams Options",
-        "description": "Changes apply seamlessly without a restart.",
+        "description": "Changes apply seamlessly without a Home Assistant restart.",
         "data": {
-          "scan_interval": "API Update frequency? (Default 4).",
-          "num_sensors": "Maximum number of Stream Monitoring Sensors.",
-          "verify_ssl": "Enable SSL verification? Disable if using a self-signed certificate.",
-          "image_proxy": "Use Image Proxy",
-          "advanced_attributes": "Advanced Attributes"
+          "session_interval": "API update frequency for active streams (seconds).",
+          "statistics_interval": "API update frequency for watch-history stats (seconds).",
+          "num_sensors": "Maximum number of concurrent stream sensors to display.",
+          "image_proxy": "Use Image Proxy?",
+          "advanced_attributes": "Include advanced session attributes?",
+          "enable_statistics": "Enable watch-history statistics?",
+          "statistics_days": "Number of days to fetch watch-history from Tautulli."
         }
       }
     }
   },
+
   "error": {
-    "cannot_connect": "Unable to connect to Tautulli. Please check your settings."
+    "cannot_connect": "Unable to connect to Tautulli. Please check your URL, API key, and network connectivity."
   }
 }
