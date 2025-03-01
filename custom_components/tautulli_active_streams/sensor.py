@@ -6,6 +6,9 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.const import STATE_OFF, CONF_URL, CONF_API_KEY
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.components.sensor import SensorStateClass, SensorDeviceClass
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr
 
 from .const import (
     DOMAIN,
@@ -83,6 +86,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(session_sensors, True)
     async_add_entities(diagnostic_sensors, True)
     async_add_entities(stats_sensors, True)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
 
 
 class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
@@ -222,7 +226,6 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         attributes.update({
             "user_friendly_name": session.get("friendly_name"),
             "username": session.get("username"),
-            "email": session.get("email"),
             "user_thumb": session.get("user_thumb"),
             "session_id": session.get("session_id"),
             "library_name": session.get("library_name"),
@@ -252,13 +255,12 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             "transcode_throttled": session.get("transcode_throttled"),
             "transcode_progress": session.get("transcode_progress"),
             "transcode_speed": session.get("transcode_speed"),
-            "stream_container": session.get("stream_container"),
-            "stream_start_time_raw": session.get("start_time_raw"),
             "stream_start_time": session.get("start_time"),
             "stream_duration": formatted_duration,
-            "Stream_paused_duration": session.get("Stream_paused_duration"),
             "stream_remaining": formatted_remaining,
-            "stream_eta": formatted_eta,
+            "Stream_paused_duration": session.get("Stream_paused_duration"),
+            "stream_video_resolution": session.get("stream_video_resolution"),
+            "stream_container": session.get("stream_container"),
             "stream_bitrate": session.get("stream_bitrate"),
             "stream_video_bitrate": session.get("stream_video_bitrate"),
             "stream_video_codec": session.get("stream_video_codec"),
@@ -285,17 +287,21 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
     """
 
     def __init__(self, coordinator, entry, metric):
+        """Initialize the diagnostic sensor."""
         super().__init__(coordinator)
         self._entry = entry
         self._metric = metric
         self._attr_unique_id = f"tautulli_{entry.entry_id}_{metric}"
-        self._attr_name = f"{metric.replace('_', ' ').title()}"
+        self.entity_id = f"sensor.tautulli_{metric}" 
+        self._attr_name = f"{metric.replace('_', ' ').title()}" 
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-
-        # For bandwidth metrics, set device class
+        self._attr_device_info = self.device_info
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_device_class = SensorDeviceClass.DATA_SIZE
         if metric in ["total_bandwidth", "lan_bandwidth", "wan_bandwidth"]:
-            self._attr_device_class = SensorDeviceClass.DATA_SIZE
-            self._attr_state_class = SensorStateClass.MEASUREMENT
+            self._attr_native_unit_of_measurement = "Mbps"
+        else:
+            self._attr_native_unit_of_measurement = None
 
     @property
     def device_info(self):
@@ -382,13 +388,9 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def state(self):
-        """Return 'playing' if the user is currently streaming, else 'off'."""
-        # We'll keep your existing code that checks self.coordinator.data["sessions"].
-        sessions = self.coordinator.data.get("sessions", [])
-        for s in sessions:
-            if s.get("user") == self._username and (s.get("state") or "").lower() == "playing":
-                return "playing"
-        return "off"
+        user_stats = self.coordinator.data["user_stats"].get(self._username, {})
+        return user_stats.get("total_play_duration", "0h 0m")
+    
 
     @property
     def extra_state_attributes(self):
@@ -415,8 +417,8 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
             "total_paused_duration": self._stats.get("total_paused_duration", "0h 0m"),
             "last_transcode_date": self._stats.get("last_transcode_date", ""),
             "watched_morning": self._stats.get("watched_morning", 0),
-            "watched_midday": self._stats.get("watched_midday", 0),
             "watched_afternoon": self._stats.get("watched_afternoon", 0),
+            "watched_midday": self._stats.get("watched_midday", 0),
             "watched_evening": self._stats.get("watched_evening", 0),
             "preferred_watch_time": self._stats.get("preferred_watch_time", ""),
             "lan_plays": self._stats.get("lan_plays", 0),
@@ -432,3 +434,36 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
         """
         all_stats = self.coordinator.data.get("user_stats", {})
         self._stats = all_stats.get(self._username, {})
+
+
+
+async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    enable_stats = entry.options.get(CONF_ENABLE_STATISTICS, False)
+    ent_reg = er.async_get(hass)
+    dev_reg = dr.async_get(hass)
+
+    if not enable_stats:
+        # remove existing stats sensors
+        for entity_entry in list(ent_reg.entities.values()):
+            if (
+                entity_entry.config_entry_id == entry.entry_id
+                and "_stats_" in (entity_entry.unique_id or "")
+            ):
+                ent_reg.async_remove(entity_entry.entity_id)
+
+        # remove the stats device
+        for device_entry in list(dev_reg.devices.values()):
+            if (
+                entry.entry_id in device_entry.config_entries
+                and any(
+                    iden[0] == DOMAIN and iden[1] == f"{entry.entry_id}_statistics_device"
+                    for iden in device_entry.identifiers
+                )
+            ):
+                dev_reg.async_remove_device(device_entry.id)
+
+    # **Either way, reload** so that:
+    # - if stats is disabled, we confirm no new stats sensors will be created
+    # - if stats is enabled, we re-run async_setup_entry and add them
+    await hass.config_entries.async_reload(entry.entry_id)
+
