@@ -428,6 +428,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await sessions_coordinator.async_config_entry_first_refresh()
     await history_coordinator.async_config_entry_first_refresh()
 
+    # Force another immediate refresh if stats are on:
+    if entry.options.get(CONF_ENABLE_STATISTICS, False):
+        await history_coordinator.async_request_refresh()
+
     # 4) Store everything in hass.data
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
@@ -455,6 +459,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await async_setup_kill_stream_services(hass, entry, api)
     except Exception as exc:
         _LOGGER.error("Exception during kill stream service registration: %s", exc, exc_info=True)
+        
+    sessions_coordinator.old_stats_toggle = entry.options.get(CONF_ENABLE_STATISTICS, False)
 
     # 8) Listen for options changes
     entry.async_on_unload(entry.add_update_listener(async_update_options))
@@ -550,8 +556,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     history_coordinator = data["history_coordinator"]
 
     # Gather old/new stats toggle
-    old_stats = entry.options.get(CONF_ENABLE_STATISTICS, False)
+    old_stats = sessions_coordinator.old_stats_toggle
     new_stats = entry.options.get(CONF_ENABLE_STATISTICS, False)
+
+    # Finally, remember to store the new value for next time
+    sessions_coordinator.old_stats_toggle = new_stats
 
     # Gather old/new sensor counts
     old_sensors = sessions_coordinator.sensor_count
