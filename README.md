@@ -1,4 +1,8 @@
-# Tautulli Active Streams - Integration for Home Assistant
+
+![logo@2x](https://github.com/user-attachments/assets/07b046fe-aebb-444b-8b97-a179ce4ef420)
+<br>
+
+---
 
  ## ⭐ Like This Integration? 
  ``` If you find the **Tautulli Active Streams** integration helpful, please take a moment to give it a ⭐ on [GitHub] Your feedback and support help improve the project and motivate further development. Thanks! 🚀 ```
