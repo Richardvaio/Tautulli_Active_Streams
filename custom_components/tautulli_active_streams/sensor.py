@@ -466,7 +466,12 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
 
         # Build image URLs — always use the authenticated proxy to avoid
         # exposing the Tautulli API key in sensor attributes.
-        thumb_url = session.get("grandparent_thumb") or session.get("thumb")
+        # For music (media_type == "track"), prefer parent_thumb (album cover)
+        # over grandparent_thumb (artist poster).
+        if session.get("media_type") == "track":
+            thumb_url = session.get("parent_thumb") or session.get("thumb")
+        else:
+            thumb_url = session.get("grandparent_thumb") or session.get("thumb")
         if thumb_url and base_url and api_key:
             attributes["image_url"] = (
                 f"/api/tautulli/image"

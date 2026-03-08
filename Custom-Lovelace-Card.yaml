@@ -101,16 +101,21 @@ filter:
             ]]]
           title: |
             [[[
-              if (states[variables.entity].state == 'playing') {
-                return "<ha-icon icon='mdi:play' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> " + states[variables.entity].attributes.full_title;
-              } else {
-                if (states[variables.entity].state == 'paused') {
-                  return "<ha-icon icon='mdi:pause' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> " + states[variables.entity].attributes.full_title;
-                } else {
-                  return states[variables.entity].attributes.full_title;
-                }
+              var a = states[variables.entity].attributes;
+              var s = states[variables.entity].state;
+              var icon = '';
+              if (s == 'playing') {
+                icon = "<ha-icon icon='mdi:play' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> ";
+              } else if (s == 'paused') {
+                icon = "<ha-icon icon='mdi:pause' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> ";
               }
-
+              if (a.media_type == 'track') {
+                var artist = a.grandparent_title || '';
+                var album = a.parent_title || '';
+                var track = a.title || a.full_title || '';
+                return icon + artist + ' — ' + album + ' — ' + track;
+              }
+              return icon + a.full_title;
             ]]]
           stream: |
             [[[
@@ -124,8 +129,11 @@ filter:
             ]]]
           media_detail: |
             [[[
-              if(states[variables.entity].attributes.media_type == 'movie') {
+              var mt = states[variables.entity].attributes.media_type;
+              if(mt == 'movie') {
                 return "<ha-icon icon='mdi:filmstrip' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> (" + states[variables.entity].attributes.year + ")";
+              } else if(mt == 'track') {
+                return "<ha-icon icon='mdi:music' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> Track " + states[variables.entity].attributes.media_index;
               } else {
                 return "<ha-icon icon='mdi:television-classic' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> S" + states[variables.entity].attributes.parent_media_index + " • E" + states[variables.entity].attributes.media_index;
               }
