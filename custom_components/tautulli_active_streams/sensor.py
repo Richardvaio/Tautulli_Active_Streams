@@ -816,7 +816,7 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
 
         if metric in ["total_bandwidth", "lan_bandwidth", "wan_bandwidth"]:
             self._attr_device_class = SensorDeviceClass.DATA_RATE
-            self._attr_native_unit_of_measurement = "Mbps"
+            self._attr_native_unit_of_measurement = "Mbit/s"
         else:
             self._attr_device_class = None
             self._attr_native_unit_of_measurement = None

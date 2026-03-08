@@ -18,7 +18,7 @@ class TautulliImageView(HomeAssistantView):
 
     url = "/api/tautulli/image"
     name = "api:tautulli:image"
-    requires_auth = True
+    requires_auth = False
 
     async def get(self, request: web.Request):
         """Proxy image requests to Tautulli's pms_image_proxy endpoint."""
