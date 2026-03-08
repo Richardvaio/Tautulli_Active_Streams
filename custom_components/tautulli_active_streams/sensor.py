@@ -10,7 +10,9 @@ from homeassistant.components.sensor import SensorStateClass, SensorDeviceClass
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import aiohttp
 import xml.etree.ElementTree as ET
 
@@ -19,169 +21,156 @@ from .const import (
     DEFAULT_NUM_SENSORS,
     CONF_NUM_SENSORS,
     CONF_ENABLE_STATISTICS,
-    CONF_IMAGE_PROXY,
-    CONF_ADVANCED_ATTRIBUTES
+    CONF_ADVANCED_ATTRIBUTES,
+    CONF_ENABLE_IP_GEOLOCATION,
+    format_seconds_to_min_sec,
     )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def format_seconds_to_min_sec(total_seconds: float) -> str:
-    """Convert seconds into 'Mm Ss' format."""
-    total_seconds = int(total_seconds)
-    minutes = total_seconds // 60
-    secs = total_seconds % 60
-    return f"{minutes}m {secs}s"
-
-
-async def _fetch_plex_metadata(plex_base_url, plex_token, rating_key):
+async def _fetch_plex_metadata(plex_base_url, plex_token, rating_key, session):
     """
     Query Plex for metadata including chapters, markers, and other attributes.
-    Returns a tuple of (credits_offset, metadata_dict).
+    Returns a tuple of (credits_offset, metadata_dict, http_status).
     """
     url = (
         f"{plex_base_url}/library/metadata/{rating_key}"
         f"?includeChapters=1&includeMarkers=1"
-        f"&X-Plex-Token={plex_token}"
     )
+    headers = {"X-Plex-Token": plex_token}
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=10) as resp:
-                if resp.status != 200:
-                    _LOGGER.warning(
-                        "Failed to fetch XML for rating_key=%s: status=%s, reason=%s",
-                        rating_key, resp.status, resp.reason
-                    )
-                    return None, {}
+        async with session.get(
+            url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+        ) as resp:
+            if resp.status != 200:
+                _LOGGER.debug(
+                    "Plex metadata fetch failed for rating_key=%s: status=%s, reason=%s",
+                    rating_key, resp.status, resp.reason
+                )
+                return None, {}, resp.status
 
-                # Parse XML
-                xml_body = await resp.text()
-                root = ET.fromstring(xml_body)
-                
-                # Check various XML paths for metadata
-                mediacontainer = root.find("MediaContainer")
-                video_el = root.find(".//Video")
-                collection = root.find(".//Collection") 
-                director = root.find(".//Director")
-                writer = root.find(".//Writer")
-                producer = root.find(".//Producer")
-                role = root.find(".//Role")
-                
-                # If no Video element found, return empty results
-                if video_el is None:
-                    return None, {}
+            # Parse XML
+            xml_body = await resp.text()
+            root = ET.fromstring(xml_body)
 
+            # Check various XML paths for metadata
+            video_el = root.find(".//Video")
 
-                # Initialize metadata dict
-                metadata = {}
+            # If no Video element found, return empty results
+            if video_el is None:
+                return None, {}, resp.status
 
-                # 1) Credits offset from markers/chapters
-                credits_offset = None
-                for marker in video_el.findall("Marker"):
-                    if marker.attrib.get("type") == "credits":
-                        credits_offset = int(marker.attrib.get("startTimeOffset", 0))
+            # Initialize metadata dict
+            metadata = {}
+
+            # 1) Credits offset from markers/chapters
+            credits_offset = None
+            for marker in video_el.findall("Marker"):
+                if marker.attrib.get("type") == "credits":
+                    credits_offset = int(marker.attrib.get("startTimeOffset", 0))
+                    break
+
+            if not credits_offset:
+                for chapter in video_el.findall("Chapter"):
+                    if "credit" in chapter.attrib.get("tag", "").lower():
+                        credits_offset = int(chapter.attrib.get("startTimeOffset", 0))
                         break
 
-                if not credits_offset:
-                    for chapter in video_el.findall("Chapter"):
-                        if "credit" in chapter.attrib.get("tag", "").lower():
-                            credits_offset = int(chapter.attrib.get("startTimeOffset", 0))
-                            break
+            # 2) Parse Director tags
+            directors = []
+            for director in video_el.findall(".//Director"):
+                if "tag" in director.attrib:
+                    directors.append(director.attrib["tag"])
+            if directors:
+                metadata["directors"] = directors
 
-                # 2) Parse Director tags
-                directors = []
-                for director in video_el.findall(".//Director"):
-                    if "tag" in director.attrib:
-                        directors.append(director.attrib["tag"])
-                if directors:
-                    metadata["directors"] = directors
+            # 3) Parse Role/Cast tags
+            cast = []
+            for role in video_el.findall(".//Role"):
+                cast_entry = {
+                    "actor": role.attrib.get("tag"),
+                    "role": role.attrib.get("role")
+                }
+                cast.append(cast_entry)
+            if cast:
+                metadata["cast"] = cast
 
-                # 3) Parse Role/Cast tags
-                cast = []
-                for role in video_el.findall(".//Role"):
-                    cast_entry = {
-                        "actor": role.attrib.get("tag"),
-                        "role": role.attrib.get("role")
-                    }
-                    cast.append(cast_entry)
-                if cast:
-                    metadata["cast"] = cast
+            # 4) Parse Genre tags
+            genres = []
+            for genre in video_el.findall(".//Genre"):
+                if "tag" in genre.attrib:
+                    genres.append(genre.attrib["tag"])
+            if genres:
+                metadata["genres"] = genres
 
-                # 4) Parse Genre tags
-                genres = []
-                for genre in video_el.findall(".//Genre"):
-                    if "tag" in genre.attrib:
-                        genres.append(genre.attrib["tag"])
-                if genres:
-                    metadata["genres"] = genres
+            # 5) Parse Writer tags
+            writers = []
+            for writer in video_el.findall(".//Writer"):
+                if "tag" in writer.attrib:
+                    writers.append(writer.attrib["tag"])
+            if writers:
+                metadata["writers"] = writers
 
-                # 5) Parse Writer tags
-                writers = []
-                for writer in video_el.findall(".//Writer"):
-                    if "tag" in writer.attrib:
-                        writers.append(writer.attrib["tag"])
-                if writers:
-                    metadata["writers"] = writers
+            # 6) Parse Country tags
+            countries = []
+            for country in video_el.findall(".//Country"):
+                if "tag" in country.attrib:
+                    countries.append(country.attrib["tag"])
+            if countries:
+                metadata["country"] = countries[0]  # Take first country
 
-                # 6) Parse Country tags
-                countries = []
-                for country in video_el.findall(".//Country"):
-                    if "tag" in country.attrib:
-                        countries.append(country.attrib["tag"])
-                if countries:
-                    metadata["country"] = countries[0]  # Take first country
+            # 7) Parse Guid tags for external IDs
+            guids = []
+            for guid in video_el.findall(".//Guid"):
+                if "id" in guid.attrib:
+                    guids.append(guid.attrib["id"])
+            if guids:
+                metadata["guids"] = guids
 
-                # 7) Parse Guid tags for external IDs
-                guids = []
-                for guid in video_el.findall(".//Guid"):
-                    if "id" in guid.attrib:
-                        guids.append(guid.attrib["id"])
-                if guids:
-                    metadata["guids"] = guids
+            # 8) Get Media/Part info for file location
+            media = video_el.find(".//Media")
+            if media is not None:
+                part = media.find("Part")
+                if part is not None and "file" in part.attrib:
+                    metadata["library_folder"] = part.attrib["file"]
 
-                # 8) Get Media/Part info for file location
-                media = video_el.find(".//Media")
-                if media is not None:
-                    part = media.find("Part")
-                    if part is not None and "file" in part.attrib:
-                        metadata["library_folder"] = part.attrib["file"]
+            # 9) Get library section info from parent container
+            library = root.find("LibrarySection")
+            if library is not None:
+                if "title" in library.attrib:
+                    metadata["library_section_title"] = library.attrib["title"]
+                if "id" in library.attrib:
+                    metadata["library_section_id"] = library.attrib["id"]
 
-                # 9) Get library section info from parent container
-                library = root.find("LibrarySection")
-                if library is not None:
-                    if "title" in library.attrib:
-                        metadata["library_section_title"] = library.attrib["title"]
-                    if "id" in library.attrib:
-                        metadata["library_section_id"] = library.attrib["id"]
+            # 10) Parse Rating tags
+            for rating in video_el.findall(".//Rating"):
+                image = rating.attrib.get("image", "")
+                value = rating.attrib.get("value")
+                if value:
+                    if "rottentomatoes://image.rating.ripe" in image:
+                        metadata["rotten_tomatoes_rating"] = value
+                    elif "rottentomatoes://image.rating.upright" in image:
+                        metadata["rotten_tomatoes_audience_rating"] = value
+                    elif "imdb://image.rating" in image:
+                        metadata["imdb_rating"] = value
 
-                # 10) Parse Rating tags
-                for rating in video_el.findall(".//Rating"):
-                    image = rating.attrib.get("image", "")
-                    value = rating.attrib.get("value")
-                    if value:
-                        if "rottentomatoes://image.rating.ripe" in image:
-                            metadata["rotten_tomatoes_rating"] = value
-                        elif "rottentomatoes://image.rating.upright" in image:
-                            metadata["rotten_tomatoes_audience_rating"] = value
-                        elif "imdb://image.rating" in image:
-                            metadata["imdb_rating"] = value
+            # 11) Get basic metadata from Video attributes
+            basic_fields = [
+                "title", "summary", "year", "rating", "studio",
+                "tagline", "contentRating", "originallyAvailableAt",
+                "audienceRating", "viewCount", "addedAt", "updatedAt",
+                "lastViewedAt"
+            ]
+            for field in basic_fields:
+                if field in video_el.attrib:
+                    metadata[field] = video_el.attrib[field]
 
-                # 11) Get basic metadata from Video attributes
-                basic_fields = [
-                    "title", "summary", "year", "rating", "studio",
-                    "tagline", "contentRating", "originallyAvailableAt",
-                    "audienceRating", "viewCount", "addedAt", "updatedAt",
-                    "lastViewedAt"
-                ]
-                for field in basic_fields:
-                    if field in video_el.attrib:
-                        metadata[field] = video_el.attrib[field]
-
-                return credits_offset, metadata
+            return credits_offset, metadata, 200
 
     except Exception as err:
-        _LOGGER.warning("Error fetching Plex metadata for rating_key=%s: %s", rating_key, err)
-        return None, {}
+        _LOGGER.debug("Error fetching Plex metadata for rating_key=%s: %s", rating_key, err)
+        return None, {}, None
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -190,10 +179,6 @@ async def async_setup_entry(hass, entry, async_add_entities):
     data = hass.data[DOMAIN][entry.entry_id]
     sessions_coordinator = data["sessions_coordinator"]
     history_coordinator = data["history_coordinator"]
-
-    # Force a fetch so the sensors see the final plex fields
-    await sessions_coordinator.async_request_refresh()
-    await history_coordinator.async_request_refresh()
 
     # Number of active stream sensors to create
     num_sensors = entry.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
@@ -267,23 +252,26 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         self._unsub_timer = None
 
         # new: track credits
-        self._credits_start_time = None  # e.g. "1m 23s"
+        self._credits_offset_ms = None  # raw credits offset in milliseconds
         self._in_credits = False
 
         # Add new tracking variables
         self._last_state = STATE_OFF
         self._last_rating_key = None
         self._metadata_fetched = False
+        self._auth_warning_emitted = False
+        self._last_written_state = None
+        self._last_written_attrs = None
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, f"{self._entry.entry_id}_active_streams")},
-            "name": f"{self._entry.title} Active Streams",
-            "manufacturer": "Richardvaio",
-            "model": "Tautulli Active Streams",
-            "entry_type": "service",
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry.entry_id}_active_streams")},
+            name=f"{self._entry.title} Active Streams",
+            manufacturer="Richardvaio",
+            model="Tautulli Active Streams",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
     async def async_added_to_hass(self):
         """
@@ -306,11 +294,15 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
 
     async def _update_every_second(self, now):
         """Called every second to update pause duration and credits only."""
+        # Guard against coordinator data not yet available
+        if not self.coordinator.data:
+            return
+
         # 1) Update local paused-time tracking
         self._update_pause_duration()
 
         # 2) Check if we need to fetch metadata
-        current_state = self.state
+        current_state = self.native_value
         sessions = self.coordinator.data.get("sessions", [])
         
         if len(sessions) > self._index:
@@ -336,11 +328,17 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             self._last_state = STATE_OFF
             self._last_rating_key = None
             self._metadata_fetched = False
-            self._credits_start_time = None
+            self._auth_warning_emitted = False
+            self._credits_offset_ms = None
             self._in_credits = False
 
-        # Finally, write new state attributes
-        self.async_write_ha_state()
+        # Only write state if something changed (avoid 300 DB writes/min)
+        new_state = self.native_value
+        new_attrs = self.extra_state_attributes
+        if new_state != self._last_written_state or new_attrs != self._last_written_attrs:
+            self._last_written_state = new_state
+            self._last_written_attrs = new_attrs
+            self.async_write_ha_state()
 
     async def _fetch_full_metadata(self):
         """Fetch full metadata from Plex when needed."""
@@ -361,43 +359,59 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             return
 
         try:
-            credits_offset, metadata = await _fetch_plex_metadata(
-                plex_base_url, plex_token, rating_key
+            http_session = async_get_clientsession(self.hass)
+            credits_offset, metadata, status = await _fetch_plex_metadata(
+                plex_base_url, plex_token, rating_key, http_session
             )
-            
-            # Store credits offset for future checks
-            if credits_offset:
-                minutes = credits_offset // 60000
-                seconds = (credits_offset % 60000) // 1000
-                self._credits_start_time = f"{minutes}m {seconds}s"
-            else:
-                self._credits_start_time = None
+
+            if status in (401, 403):
+                if not self._auth_warning_emitted:
+                    _LOGGER.warning(
+                        "Plex metadata authorization failed (status=%s). "
+                        "Skipping metadata enrichment for this stream; check plex_token in the "
+                        "'%s' config entry.",
+                        status,
+                        self._entry.title,
+                    )
+                    self._auth_warning_emitted = True
+                # Prevent per-second retry storms for the same session.
+                self._metadata_fetched = True
+                self._credits_offset_ms = None
+                return
+
+            if status and status != 200:
+                # Prevent per-second retry storms for the same session.
+                self._metadata_fetched = True
+                self._credits_offset_ms = None
+                return
+
+            # Store credits offset as integer milliseconds for future checks
+            self._credits_offset_ms = credits_offset if credits_offset else None
 
             # Update session metadata in coordinator
             if metadata and "sessions" in self.coordinator.data:
                 self.coordinator.data["sessions"][self._index].update(metadata)
-                self._metadata_fetched = True
+
+            # Mark this stream as attempted, even when metadata is empty.
+            self._metadata_fetched = True
+            self._auth_warning_emitted = False
 
         except Exception as err:
             _LOGGER.warning("Error fetching full metadata: %s", err)
 
     async def _update_credits_only(self):
         """Only check credits position, no full metadata fetch."""
-        if not self._credits_start_time:
+        if self._credits_offset_ms is None:
             return
 
-        session = self.coordinator.data["sessions"][self._index]
-        view_offset_str = session.get("view_offset")
-        
+        sessions = self.coordinator.data.get("sessions", [])
+        if len(sessions) <= self._index:
+            return
+
+        session = sessions[self._index]
         try:
-            view_offset = int(view_offset_str)
-            credits_ms = sum(
-                x * y for x, y in zip(
-                    map(int, self._credits_start_time.replace('m','').replace('s','').split()),
-                    (60000, 1000)
-                )
-            )
-            self._in_credits = (view_offset >= credits_ms)
+            view_offset = int(session.get("view_offset", 0))
+            self._in_credits = (view_offset >= self._credits_offset_ms)
         except (ValueError, TypeError):
             self._in_credits = False
 
@@ -406,7 +420,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         Increments local pause counter if the state is 'paused'.
         Resets if it's not paused.
         """
-        current_state = self.state.lower()
+        current_state = (self.native_value or "").lower()
         if current_state == "paused":
             if self._paused_start is None:
                 self._paused_start = time.time()
@@ -419,8 +433,10 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             self._paused_duration_str = "0m 0s"
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the current Tautulli session state (playing, paused, etc.)"""
+        if not self.coordinator.data:
+            return STATE_OFF
         sessions = self.coordinator.data.get("sessions", [])
         if len(sessions) > self._index:
             return sessions[self._index].get("state", STATE_OFF)
@@ -444,48 +460,30 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
 
         base_url = self._entry.data.get(CONF_URL)
         api_key = self._entry.data.get(CONF_API_KEY)
-        image_proxy = self._entry.options.get(CONF_IMAGE_PROXY, False)
         advanced = self._entry.options.get(CONF_ADVANCED_ATTRIBUTES, False)
 
         attributes = {}
 
-        # Build an image URL if base_url & api_key
+        # Build image URLs — always use the authenticated proxy to avoid
+        # exposing the Tautulli API key in sensor attributes.
         thumb_url = session.get("grandparent_thumb") or session.get("thumb")
         if thumb_url and base_url and api_key:
-            if image_proxy:
-                attributes["image_url"] = (
-                    f"/api/tautulli/image"
-                    f"?entry_id={self._entry.entry_id}"
-                    f"&img={thumb_url}"
-                    "&width=300&height=450&fallback=poster&refresh=true"
-                )
-            else:
-                attributes["image_url"] = (
-                    f"{base_url}/api/v2"
-                    f"?apikey={api_key}"
-                    f"&cmd=pms_image_proxy"
-                    f"&img={thumb_url}"
-                    "&width=300&height=450&fallback=poster&refresh=true"
-                )
+            attributes["image_url"] = (
+                f"/api/tautulli/image"
+                f"?entry_id={self._entry.entry_id}"
+                f"&img={thumb_url}"
+                "&width=300&height=450&fallback=poster&refresh=true"
+            )
 
-        # Build an art URL if base_url & api_key
+        # Build an art URL
         art_path = session.get("art")
         if art_path and base_url and api_key:
-            if image_proxy:
-                attributes["art_url"] = (
-                    f"/api/tautulli/image"
-                    f"?entry_id={self._entry.entry_id}"
-                    f"&img={art_path}"
-                    "&width=1920&height=1080&fallback=art&refresh=true"
-                )
-            else:
-                attributes["art_url"] = (
-                    f"{base_url}/api/v2"
-                    f"?apikey={api_key}"
-                    f"&cmd=pms_image_proxy"
-                    f"&img={art_path}"
-                    "&width=1920&height=1080&fallback=art&refresh=true"
-                )
+            attributes["art_url"] = (
+                f"/api/tautulli/image"
+                f"?entry_id={self._entry.entry_id}"
+                f"&img={art_path}"
+                "&width=1920&height=1080&fallback=art&refresh=true"
+            )
 
         # Basic
         attributes["user"] = session.get("user")
@@ -513,6 +511,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         attributes["stream_video_resolution"] = session.get("stream_video_resolution")
         attributes["transcode_decision"] = session.get("transcode_decision")
         attributes["stream_paused_duration"] = self._paused_duration_str
+        attributes["live"] = session.get("live")
 
         # If advanced is off, return now
         if advanced:
@@ -550,6 +549,8 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "user_thumb": session.get("user_thumb"),
                 "session_id": session.get("session_id"),
                 "library_name": session.get("library_name"),
+                "channel_call_sign": session.get("channel_call_sign"),
+                "channel_title": session.get("channel_title"),
                 "grandparent_title": session.get("grandparent_title"),
                 "title": session.get("title"),
                 "container": session.get("container"),
@@ -599,151 +600,186 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "stream_audio_language_code": session.get("stream_audio_language_code"),
             })
 
+            # ---- Source Media Details ----
+            # Format total source duration (HH:MM:SS)
+            if session.get("duration"):
+                try:
+                    dur_ms = float(session["duration"])
+                    dur_hours = int(dur_ms // 3600000)
+                    dur_minutes = int((dur_ms % 3600000) // 60000)
+                    dur_seconds = int((dur_ms % 60000) // 1000)
+                    attributes["duration"] = f"{dur_hours}:{dur_minutes:02d}:{dur_seconds:02d}"
+                except (ValueError, TypeError):
+                    attributes["duration"] = session["duration"]
+
+            attributes.update({
+                # User & Platform
+                "user_id": session.get("user_id"),
+                "platform_name": session.get("platform_name"),
+                "platform_version": session.get("platform_version"),
+                "product_version": session.get("product_version"),
+                "machine_id": session.get("machine_id"),
+
+                # Source Media
+                "original_title": session.get("original_title"),
+                "parent_title": session.get("parent_title"),
+                "sort_title": session.get("sort_title"),
+                "bitrate": session.get("bitrate"),
+                "video_full_resolution": session.get("video_full_resolution"),
+                "video_bit_depth": session.get("video_bit_depth"),
+                "video_bitrate": session.get("video_bitrate"),
+                "video_scan_type": session.get("video_scan_type"),
+                "video_height": session.get("video_height"),
+                "video_width": session.get("video_width"),
+                "video_language": session.get("video_language"),
+                "video_language_code": session.get("video_language_code"),
+                "audio_sample_rate": session.get("audio_sample_rate"),
+                "audio_bitrate_mode": session.get("audio_bitrate_mode"),
+                "file": session.get("file"),
+                "file_size": session.get("file_size"),
+                "optimized_version": session.get("optimized_version"),
+                "optimized_version_title": session.get("optimized_version_title"),
+
+                # Stream Details
+                "quality_profile": session.get("quality_profile"),
+                "stream_audio_decision": session.get("stream_audio_decision"),
+                "stream_audio_sample_rate": session.get("stream_audio_sample_rate"),
+                "stream_video_dynamic_range": session.get("stream_video_dynamic_range"),
+                "stream_video_bit_depth": session.get("stream_video_bit_depth"),
+                "stream_video_scan_type": session.get("stream_video_scan_type"),
+                "stream_video_color_primaries": session.get("stream_video_color_primaries"),
+                "stream_video_color_range": session.get("stream_video_color_range"),
+                "stream_video_color_space": session.get("stream_video_color_space"),
+                "stream_video_color_trc": session.get("stream_video_color_trc"),
+                "stream_video_height": session.get("stream_video_height"),
+                "stream_video_width": session.get("stream_video_width"),
+                "stream_aspect_ratio": session.get("stream_aspect_ratio"),
+
+                # Subtitle Details
+                "subtitles": session.get("subtitles"),
+                "subtitle_codec": session.get("subtitle_codec"),
+                "subtitle_forced": session.get("subtitle_forced"),
+                "subtitle_language_code": session.get("subtitle_language_code"),
+                "subtitle_location": session.get("subtitle_location"),
+                "subtitle_container": session.get("subtitle_container"),
+                "stream_subtitle_codec": session.get("stream_subtitle_codec"),
+                "stream_subtitle_language": session.get("stream_subtitle_language"),
+                "stream_subtitle_language_code": session.get("stream_subtitle_language_code"),
+                "stream_subtitle_forced": session.get("stream_subtitle_forced"),
+                "stream_subtitle_location": session.get("stream_subtitle_location"),
+                "stream_subtitle_decision": session.get("stream_subtitle_decision"),
+                "stream_subtitle_container": session.get("stream_subtitle_container"),
+
+                # Transcode Hardware
+                "transcode_hw_decoding": session.get("transcode_hw_decoding"),
+                "transcode_hw_encoding": session.get("transcode_hw_encoding"),
+                "transcode_hw_full_pipeline": session.get("transcode_hw_full_pipeline"),
+                "transcode_hw_decode_title": session.get("transcode_hw_decode_title"),
+                "transcode_hw_encode_title": session.get("transcode_hw_encode_title"),
+                "transcode_hw_requested": session.get("transcode_hw_requested"),
+                "transcode_protocol": session.get("transcode_protocol"),
+                "transcode_audio_channels": session.get("transcode_audio_channels"),
+                "transcode_height": session.get("transcode_height"),
+                "transcode_width": session.get("transcode_width"),
+
+                # Connection
+                "secure": session.get("secure"),
+                "relay": session.get("relay"),
+
+                # Live TV
+                "live_uuid": session.get("live_uuid"),
+                "channel_id": session.get("channel_id"),
+                "channel_identifier": session.get("channel_identifier"),
+                "channel_stream": session.get("channel_stream"),
+                "channel_thumb": session.get("channel_thumb"),
+                "channel_vcn": session.get("channel_vcn"),
+
+                # IDs & References
+                "session_key": session.get("session_key"),
+                "section_id": session.get("section_id"),
+                "guid": session.get("guid"),
+                "grandparent_guid": session.get("grandparent_guid"),
+                "grandparent_rating_key": session.get("grandparent_rating_key"),
+                "parent_guid": session.get("parent_guid"),
+                "parent_rating_key": session.get("parent_rating_key"),
+                "rating_key": session.get("rating_key"),
+
+                # Tautulli Metadata (available without Plex)
+                "directors": session.get("directors"),
+                "writers": session.get("writers"),
+                "actors": session.get("actors"),
+                "genres": session.get("genres"),
+                "labels": session.get("labels"),
+                "content_rating": session.get("content_rating"),
+                "summary": session.get("summary"),
+                "tagline": session.get("tagline"),
+                "studio": session.get("studio"),
+                "originally_available_at": session.get("originally_available_at"),
+                "rating": session.get("rating"),
+                "audience_rating": session.get("audience_rating"),
+            })
+
         # ------------------------------------------------------
-        # PLEX ATTRIBUTES (if plex_enabled == True)
+        # PLEX ENRICHMENTS (requires plex_enabled)
+        # Provides: credits detection, Rotten Tomatoes/IMDB
+        # ratings, cast with roles, country, external GUIDs,
+        # library file path/section info, timestamps, view count.
         # ------------------------------------------------------
         if plex_enabled and plex_token and plex_base_url:
-            # Directors
-            directors = []
-            if isinstance(session.get("directors"), list):
-                directors.extend(session["directors"])
-            elif isinstance(session.get("Director"), list):
-                directors.extend([d.get("tag") for d in session["Director"]])
-            elif isinstance(session.get("Director"), dict):
-                directors.append(session["Director"].get("tag"))
-            if directors:
-                attributes["directors"] = directors
-
-            # Cast/Roles
-            cast = []
-            if isinstance(session.get("cast"), list):
-                cast.extend(session["cast"])
-            elif isinstance(session.get("Role"), list):
-                cast.extend([{"actor": r.get("tag"), "role": r.get("role")} for r in session["Role"]])
-            elif isinstance(session.get("Role"), dict):
-                cast.append({"actor": session["Role"].get("tag"), "role": session["Role"].get("role")})
+            # Cast with roles (Plex XML provides actor + character role)
+            cast = session.get("cast")
             if cast:
                 attributes["cast"] = cast
 
-            # Writers
-            writers = []
-            if isinstance(session.get("writers"), list):
-                writers.extend(session["writers"])
-            elif isinstance(session.get("Writer"), list):
-                writers.extend([w.get("tag") for w in session["Writer"]])
-            elif isinstance(session.get("Writer"), dict):
-                writers.append(session["Writer"].get("tag"))
-            if writers:
-                attributes["writers"] = writers
-
-            # Genres
-            genres = []
-            if isinstance(session.get("genres"), list):
-                genres.extend(session["genres"])
-            elif isinstance(session.get("Genre"), list):
-                genres.extend([g.get("tag") for g in session["Genre"]])
-            elif isinstance(session.get("Genre"), dict):
-                genres.append(session["Genre"].get("tag"))
-            if genres:
-                attributes["genres"] = genres
-
-            # Country
-            country = session.get("country") or (
-                session.get("Country", {}).get("tag") if isinstance(session.get("Country"), dict) else None
-            )
+            # Country (from Plex XML)
+            country = session.get("country")
             if country:
                 attributes["country"] = country
 
-            # External IDs (GUIDs)
-            guids = []
-            if isinstance(session.get("guids"), list):
-                guids.extend(session["guids"])
-            elif isinstance(session.get("Guid"), list):
-                guids.extend([g.get("id") for g in session["Guid"] if g.get("id")])
-            elif isinstance(session.get("Guid"), dict):
-                guid_id = session["Guid"].get("id")
-                if guid_id:
-                    guids.append(guid_id)
+            # External GUIDs (imdb://, tmdb://, tvdb:// from Plex XML)
+            guids = session.get("guids")
             if guids:
                 attributes["guids"] = guids
 
-            # Library Info
-            library_folder = session.get("library_folder") or session.get("Part", {}).get("file")
+            # Library file path (from Plex XML Parts)
+            library_folder = session.get("library_folder")
             if library_folder:
                 attributes["library_folder"] = library_folder
 
-            library_section_title = session.get("library_section_title") or session.get("librarySectionTitle")
+            # Library section info (from Plex XML)
+            library_section_title = session.get("library_section_title")
             if library_section_title:
                 attributes["library_section_title"] = library_section_title
 
-            library_section_id = session.get("library_section_id") or session.get("librarySectionID")
+            library_section_id = session.get("library_section_id")
             if library_section_id:
                 attributes["library_section_id"] = library_section_id
 
-            # Ratings
-            ratings_mapping = {
-                "rottentomatoes://image.rating.ripe": "rotten_tomatoes_rating",
-                "rottentomatoes://image.rating.upright": "rotten_tomatoes_audience_rating",
-                "imdb://image.rating": "imdb_rating"
-            }
+            # Rotten Tomatoes & IMDB Ratings (from Plex XML Rating tags)
+            for attr_name in ("rotten_tomatoes_rating", "rotten_tomatoes_audience_rating", "imdb_rating"):
+                value = session.get(attr_name)
+                if value:
+                    attributes[attr_name] = value
 
-            # Check both flattened and nested rating structures
-            for rating_type, attr_name in ratings_mapping.items():
-                rating_value = None
-                # Check flattened structure
-                if session.get(attr_name):
-                    rating_value = session[attr_name]
-                # Check nested Rating structure
-                elif isinstance(session.get("Rating"), list):
-                    for rating in session["Rating"]:
-                        if rating.get("image") == rating_type:
-                            rating_value = rating.get("value")
-                            break
-                if rating_value:
-                    attributes[attr_name] = rating_value
-
-            # Basic Metadata
-            basic_fields = {
-                "tagline": ["tagline"],
-                "summary": ["summary"],
-                "studio": ["studio"],
-                "content_rating": ["content_rating", "contentRating"],
-                "rating": ["rating"],
-                "audience_rating": ["audience_rating", "audienceRating"],
-                "originally_available_at": ["originally_available_at", "originallyAvailableAt"],
-                "rating_key": ["rating_key"],
-            }
-
-            for attr_name, possible_keys in basic_fields.items():
-                for key in possible_keys:
-                    value = session.get(key)
-                    if value:
-                        attributes[attr_name] = value
-                        break
-
-            # Timestamps
-            timestamp_fields = ["addedAt", "updatedAt", "lastViewedAt"]
-            for field in timestamp_fields:
+            # Timestamps (from Plex XML Video attributes)
+            for field in ("addedAt", "updatedAt", "lastViewedAt"):
                 try:
                     timestamp = session.get(field)
                     if timestamp is not None and timestamp != "":
-                        # Convert string to float if needed
                         if isinstance(timestamp, str):
                             timestamp = float(timestamp)
                         elif not isinstance(timestamp, (int, float)):
                             continue
-                        # Create datetime object and format
                         try:
                             date = datetime.fromtimestamp(timestamp)
-                            field_name = field[0].lower() + field[1:]  # camelCase to snake_case
+                            field_name = field[0].lower() + field[1:]
                             attributes[field_name] = date.strftime("%Y-%m-%d %H:%M:%S")
                         except (ValueError, OSError) as err:
                             _LOGGER.debug("Invalid timestamp value for %s=%s: %s", field, timestamp, err)
-                            
                 except (ValueError, TypeError) as err:
                     _LOGGER.debug("Could not process timestamp field %s: %s", field, err)
 
-            # View Count
+            # View Count (from Plex XML)
             view_count = session.get("view_count") or session.get("viewCount")
             if view_count is not None:
                 try:
@@ -751,10 +787,12 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 except (ValueError, TypeError):
                     _LOGGER.debug("Invalid view count value: %s", view_count)
 
-            # Credits Information
+            # Credits Detection
             attributes["in_credits"] = self._in_credits
-            if self._credits_start_time:
-                attributes["credits_start_time"] = self._credits_start_time
+            if self._credits_offset_ms is not None:
+                minutes = self._credits_offset_ms // 60000
+                seconds = (self._credits_offset_ms % 60000) // 1000
+                attributes["credits_start_time"] = f"{minutes}m {seconds}s"
 
         return attributes
 
@@ -772,31 +810,32 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
         self._entry = entry
         self._metric = metric
         self._attr_unique_id = f"tautulli_{entry.entry_id}_{metric}"
-        self.entity_id = f"sensor.tautulli_{metric}"
         self._attr_name = f"{metric.replace('_', ' ').title()}"
         self._attr_entity_category = EntityCategory.DIAGNOSTIC
-        self._attr_device_info = self.device_info
         self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_device_class = SensorDeviceClass.DATA_SIZE
 
         if metric in ["total_bandwidth", "lan_bandwidth", "wan_bandwidth"]:
+            self._attr_device_class = SensorDeviceClass.DATA_RATE
             self._attr_native_unit_of_measurement = "Mbps"
         else:
+            self._attr_device_class = None
             self._attr_native_unit_of_measurement = None
 
     @property
     def device_info(self):
-        return {
-            "identifiers": {(DOMAIN, f"{self._entry.entry_id}_active_streams")},
-            "name": f"{self._entry.title} Active Streams",
-            "manufacturer": "Richardvaio",
-            "model": "Tautulli Active Streams",
-            "entry_type": "service",
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry.entry_id}_active_streams")},
+            name=f"{self._entry.title} Active Streams",
+            manufacturer="Richardvaio",
+            model="Tautulli Active Streams",
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
     @property
-    def state(self):
+    def native_value(self):
         """Return the main diagnostic value from 'diagnostics'."""
+        if not self.coordinator.data:
+            return 0
         diagnostics = self.coordinator.data.get("diagnostics", {})
         raw_value = diagnostics.get(self._metric, 0)
 
@@ -814,6 +853,8 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
         """Return additional diagnostic attributes (e.g. session list)."""
         if self._metric != "stream_count":
             return {}
+        if not self.coordinator.data:
+            return {}
         sessions = self.coordinator.data.get("sessions", [])
         filtered_sessions = []
         for s in sessions:
@@ -823,7 +864,7 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
                 "full_title": s.get("full_title"),
                 "stream_start_time": s.get("start_time"),
                 "start_time_raw": s.get("start_time_raw"),
-                "Stream_paused_duration_sec": s.get("Stream_paused_duration_sec"),
+                "stream_paused_duration_sec": s.get("stream_paused_duration_sec"),
                 "session_id": s.get("session_id"),
             })
         return {"sessions": filtered_sessions}
@@ -860,21 +901,30 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = f"{username} Stats"
 
         # Put these sensors under a separate device named "<Integration Title> Statistics"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"{entry.entry_id}_statistics_device")},
-            "name": f"{entry.title} Statistics",
-            "manufacturer": "Richardvaio",
-            "model": "Tautulli Statistics",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{entry.entry_id}_statistics_device")},
+            name=f"{entry.title} Statistics",
+            manufacturer="Richardvaio",
+            model="Tautulli Statistics",
+        )
 
     @property
     def icon(self) -> str:
         return "mdi:account"
         
     @property
-    def state(self):
-        user_stats = self.coordinator.data["user_stats"].get(self._username, {})
+    def native_value(self):
+        if not self.coordinator.data:
+            return "0h 0m"
+        user_stats = self.coordinator.data.get("user_stats", {}).get(self._username, {})
         return user_stats.get("total_play_duration", "0h 0m")
+
+    def _handle_coordinator_update(self) -> None:
+        """Update stats from coordinator data when it changes."""
+        if self.coordinator.data:
+            all_stats = self.coordinator.data.get("user_stats", {})
+            self._stats = all_stats.get(self._username, {})
+        super()._handle_coordinator_update()
 
     @property
     def extra_state_attributes(self):
@@ -933,50 +983,3 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
             "lan_plays": self._stats.get("lan_plays", 0),
             "wan_plays": self._stats.get("wan_plays", 0),
         }
-
-    async def async_update(self):
-        """
-        If the coordinator data changes, re-fetch this user's stats
-        from history_coordinator.data["user_stats"] if needed.
-        """
-        all_stats = self.coordinator.data.get("user_stats", {})
-        self._stats = all_stats.get(self._username, {})
-
-
-async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """
-    This is called when the user changes options in the UI.
-    If stats are disabled, remove existing stats sensors/device.
-    Then reload the config entry so the updated sensor count or stats toggle
-    can be applied to the sensor platform.
-    """
-    enable_stats = entry.options.get(CONF_ENABLE_STATISTICS, False)
-    ent_reg = er.async_get(hass)
-    dev_reg = dr.async_get(hass)
-
-    # If user turned stats off, remove all stats sensors & device
-    if not enable_stats:
-        for entity_entry in list(ent_reg.entities.values()):
-            if (
-                entity_entry.config_entry_id == entry.entry_id
-                and "_stats_" in (entity_entry.unique_id or "")
-            ):
-                ent_reg.async_remove(entity_entry.entity_id)
-
-        # remove the stats device
-        for device_entry in list(dev_reg.devices.values()):
-            if (
-                entry.entry_id in device_entry.config_entries
-                and any(
-                    iden[0] == DOMAIN and iden[1] == f"{entry.entry_id}_statistics_device"
-                    for iden in device_entry.identifiers
-                )
-            ):
-                dev_reg.async_remove_device(device_entry.id)
-
-    # Force a fresh Tautulli fetch (if your coordinator is sessions_coordinator):
-    sessions_coordinator = hass.data[DOMAIN][entry.entry_id]["sessions_coordinator"]
-    await sessions_coordinator.async_request_refresh()
-
-    # Reload the config entry so the changes take effect
-    await hass.config_entries.async_reload(entry.entry_id)

@@ -3,6 +3,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.components.button import ButtonEntity
 
 from .const import DOMAIN, CONF_ENABLE_STATISTICS
@@ -43,12 +44,12 @@ class TautulliFetchHistoryButton(CoordinatorEntity, ButtonEntity):
         self._attr_unique_id = f"{entry.entry_id}_fetch_watch_history"
 
         # Tie this button to the same device as user-stats sensors
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"{entry.entry_id}_statistics_device")},
-            "name": f"{entry.title} Statistics",
-            "manufacturer": "Richardvaio",
-            "model": "Tautulli Statistics",
-        }
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, f"{entry.entry_id}_statistics_device")},
+            name=f"{entry.title} Statistics",
+            manufacturer="Richardvaio",
+            model="Tautulli Statistics",
+        )
 
     async def async_press(self) -> None:
         """

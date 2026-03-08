@@ -37,8 +37,11 @@
       }
     },
     "error": {
-      "plex_token_required": "Plex token is required",
-      "invalid_plex_token": "Invalid Plex token format"
+      "cannot_connect": "Unable to connect to Tautulli. Please check your URL, API key, and network connectivity.",
+      "invalid_api_key": "The API key appears to be invalid. Please double-check it in Tautulli's Web Interface.",
+      "unknown": "An unexpected error occurred. Please check your logs for more details.",
+      "plex_token_required": "Plex token is required.",
+      "invalid_plex_token": "Invalid Plex token format."
     }
   },
   "options": {
@@ -68,9 +71,6 @@
         }
       }
     }
-  },
-  "error": {
-    "cannot_connect": "Unable to connect to Tautulli. Please check your URL, API key, and network connectivity.",
-    "invalid_api_key": "The API key appears to be invalid. Please double-check it in Tautulli’s Web Interface."
+
   }
 }

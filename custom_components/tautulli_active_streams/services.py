@@ -39,6 +39,9 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
 
     async def handle_kill_all_streams(call: ServiceCall) -> None:
         message = call.data.get("message")
+        if not sessions_coordinator.data:
+            _LOGGER.debug("Coordinator data not available yet.")
+            return
         sessions = sessions_coordinator.data.get("sessions", [])
         if not sessions:
             _LOGGER.debug("No active sessions found to kill.")
@@ -57,6 +60,9 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
     async def handle_kill_user_streams(call: ServiceCall) -> None:
         user = call.data["user"].strip().lower()
         message = call.data.get("message")
+        if not sessions_coordinator.data:
+            _LOGGER.debug("Coordinator data not available yet.")
+            return
         sessions = sessions_coordinator.data.get("sessions", [])
         if not sessions:
             _LOGGER.debug("No active sessions found to kill by user '%s'.", user)
@@ -70,7 +76,7 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
                 (s.get("username") or "").lower(),
                 (s.get("friendly_name") or "").lower(),
             ]
-            if any(user in x for x in names):
+            if any(user == x for x in names):
                 matched.append(s)
 
         if not matched:
@@ -90,6 +96,9 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
     async def handle_kill_session_stream(call: ServiceCall) -> None:
         sid = call.data["session_id"].strip()
         message = call.data.get("message", "Stream ended by admin.")
+        if not sessions_coordinator.data:
+            _LOGGER.debug("Coordinator data not available yet.")
+            return
         sessions = sessions_coordinator.data.get("sessions", [])
         if not sessions:
             _LOGGER.debug("No sessions found to kill.")

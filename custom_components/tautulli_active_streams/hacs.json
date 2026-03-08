@@ -1,15 +1,15 @@
 {
   "domain": "tautulli_active_streams",
   "name": "Tautulli Active Streams",
-  "homeassistant": "2023.1.0",
+  "homeassistant": "2024.1.0",
   "render_readme": true,
   "country": "ALL",
   "documentation": "https://github.com/Richardvaio/Tautulli_Active_Streams",
   "issue_tracker": "https://github.com/Richardvaio/Tautulli_Active_Streams/issues",
-  "requirements": ["pytautulli==23.1.1"],
+  "requirements": [],
   "codeowners": ["@Richardvaio"],
   "iot_class": "local_polling",
   "dependencies": [],
   "config_flow": true,
-  "version": "2.4.12"
+  "version": "2.5.0"
 }

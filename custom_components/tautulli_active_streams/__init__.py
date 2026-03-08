@@ -1,16 +1,12 @@
-import logging
-import asyncio
 import time
-import aiohttp
 from datetime import datetime, timedelta
 
 from homeassistant.helpers import device_registry as dr
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.const import CONF_URL, CONF_API_KEY, CONF_VERIFY_SSL
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers import entity_registry as er
 from homeassistant.util.dt import now as ha_now
 
 from .api import TautulliAPI
@@ -28,19 +24,12 @@ from .const import (
     CONF_STATISTICS_INTERVAL,
     CONF_STATISTICS_DAYS,
     CONF_STATS_MONTH_TO_DATE,
-    CONF_ENABLE_IP_GEOLOCATION, 
+    CONF_ENABLE_IP_GEOLOCATION,
+    format_seconds_to_min_sec,
     LOGGER as _LOGGER,
 )
 
 PLATFORMS = ["sensor", "button"]
-
-
-def format_seconds_to_min_sec(total_seconds: float) -> str:
-    """Convert seconds to a 'Mm Ss' string."""
-    total_seconds = int(total_seconds)
-    minutes = total_seconds // 60
-    secs = total_seconds % 60
-    return f"{minutes}m {secs}s"
 
 
 # ---------------------------
@@ -75,13 +64,13 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
         
     async def _async_update_data(self):
         """Fetch from Tautulli get_activity, track paused durations, etc."""
-        data = {}
         try:
-            resp = await self.api.get_activity()
-            data.update(resp)
+            data = await self.api.get_activity()
         except Exception as err:
-            _LOGGER.warning("Failed to update Tautulli sessions: %s", err)
-            data = {}
+            raise UpdateFailed(f"Failed to update Tautulli sessions: {err}") from err
+
+        if not data:
+            data = {"sessions": [], "diagnostics": {}}
 
         sessions = data.get("sessions", [])
         now = time.time()
@@ -107,7 +96,7 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
             sid = s.get("session_id")
             raw_ts = self.start_times.get(sid)
             if raw_ts:
-                dt = datetime.fromtimestamp(raw_ts)
+                dt = datetime.fromtimestamp(raw_ts, tz=ha_now().tzinfo)
                 s["start_time_raw"] = raw_ts
                 s["start_time"] = dt.strftime("%I:%M %p")
             else:
@@ -119,13 +108,13 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
                 if sid not in self.paused_since:
                     self.paused_since[sid] = now
                 paused_sec = now - self.paused_since[sid]
-                s["Stream_paused_duration_sec"] = paused_sec
-                s["Stream_paused_duration"] = format_seconds_to_min_sec(paused_sec)
+                s["stream_paused_duration_sec"] = paused_sec
+                s["stream_paused_duration"] = format_seconds_to_min_sec(paused_sec)
             else:
                 if sid in self.paused_since:
                     del self.paused_since[sid]
-                s["Stream_paused_duration_sec"] = 0
-                s["Stream_paused_duration"] = "0m 0s"
+                s["stream_paused_duration_sec"] = 0
+                s["stream_paused_duration"] = "0m 0s"
 
         # If IP geolocation is on => do lookups
         if self.config_entry.options.get(CONF_ENABLE_IP_GEOLOCATION, False):
@@ -187,7 +176,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
 
         # Check if user enabled statistics
         if self.config_entry.options.get(CONF_ENABLE_STATISTICS, False):
-            use_mtd = self.config_entry.options.get("stats_month_to_date", False)
+            use_mtd = self.config_entry.options.get(CONF_STATS_MONTH_TO_DATE, False)
             if use_mtd:
                 # Start from 1st of month in local HA timezone
                 after_date = ha_now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -208,9 +197,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
                 data["history"] = hist_resp
                 data["user_stats"] = self._parse_user_history(hist_resp)
             except Exception as err:
-                _LOGGER.warning("Failed to fetch Tautulli history: %s", err)
-                data["history"] = {}
-                data["user_stats"] = {}
+                raise UpdateFailed(f"Failed to fetch Tautulli history: {err}") from err
         else:
             data["history"] = {}
             data["user_stats"] = {}
@@ -345,7 +332,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             started_ts = item.get("started", 0)
             if started_ts:
                 stats["play_start_times"].append(started_ts)
-                dt_obj = datetime.fromtimestamp(started_ts)
+                dt_obj = datetime.fromtimestamp(started_ts, tz=ha_now().tzinfo)
                 hour = dt_obj.hour
                 if 0 <= hour < 6:
                     stats["watched_morning"] += 1
@@ -399,7 +386,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             # last transcode date
             ltt = stats["last_transcode_ts"]
             if ltt > 0:
-                dt_obj = datetime.fromtimestamp(ltt)
+                dt_obj = datetime.fromtimestamp(ltt, tz=ha_now().tzinfo)
                 stats["last_transcode_date"] = dt_obj.strftime("%Y-%m-%d %H:%M")
             else:
                 stats["last_transcode_date"] = ""
@@ -590,7 +577,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             
 # --------------- IPGeoCache Example --------------- #
 class IPGeoCache:
-    """Simple cache that calls Tautulli's get_geoip_lookup once per IP per day."""
+    """Simple cache that calls Tautulli's get_geoip_lookup once per IP per hour."""
     def __init__(self, api: TautulliAPI):
         self._api = api  # store reference to TautulliAPI
         self._cache = {}  # {ip: (geo_data_dict, expiry_time)}
@@ -672,25 +659,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "history_coordinator": history_coordinator
     }
 
-    # 5) Register your image view
-    hass.http.register_view(TautulliImageView)
-    hass.data["tautulli_integration_config"] = {"base_url": url, "api_key": api_key}
+    # 5) Register your image view (only once across multiple entries)
+    if "tautulli_image_view_registered" not in hass.data:
+        hass.http.register_view(TautulliImageView)
+        hass.data["tautulli_image_view_registered"] = True
 
     # 6) Forward to sensor + button
-    try:
-        await asyncio.shield(hass.config_entries.async_forward_entry_setups(entry, PLATFORMS))
-    except asyncio.CancelledError:
-        _LOGGER.error("Setup of sensor platforms was cancelled")
-        return False
-    except Exception as ex:
-        _LOGGER.error("Error forwarding entry setups: %s", ex)
-        return False
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    # 7) Setup kill-stream services
-    try:
-        await async_setup_kill_stream_services(hass, entry, api)
-    except Exception as exc:
-        _LOGGER.error("Exception during kill stream service registration: %s", exc, exc_info=True)
+    # 7) Setup kill-stream services (only once for the first entry)
+    if not hass.services.has_service(DOMAIN, "kill_all_streams"):
+        try:
+            await async_setup_kill_stream_services(hass, entry, api)
+        except Exception as exc:
+            _LOGGER.error("Exception during kill stream service registration: %s", exc, exc_info=True)
 
     # Store old stats toggle
     history_coordinator.old_stats_toggle = entry.options.get(CONF_ENABLE_STATISTICS, False)
@@ -787,7 +769,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
         _LOGGER.debug("Sensor count changed from %s to %s; reload needed", old_sensors, new_sensors)
         reload_needed = True
         
-    # If major changes, do a reload. But first, do partial refresh + remove.
+    # If major changes, do a reload.
     if reload_needed:
         # 1) If they lowered sensors, remove extras first
         if new_sensors < old_sensors:
@@ -798,19 +780,7 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
             await async_remove_statistics_sensors(hass, entry)
             await async_remove_history_button(hass, entry)
 
-        # 4) Remove user sensors for all users (Wipe them all)
-        await async_remove_all_user_stats_sensors(hass, entry)  # <-- FIXED
-        
-        # 3) PARTIAL REFRESH to get the new data (especially if days changed),
-        #    so we know which user-stats are still valid.
-        await sessions_coordinator.async_request_refresh()
-        await history_coordinator.async_request_refresh()
-
-
-
-        current_stats = history_coordinator.data.get("user_stats", {})
-
-        # 5) Reload so sensor/button code picks up changes or re-adds user sensors
+        # 3) Reload so sensor/button code picks up changes or re-adds user sensors
         await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -830,8 +800,6 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
         await history_coordinator.async_request_refresh()
 
 
-        current_stats = history_coordinator.data.get("user_stats", {})
-
 # ---------------------------
 #  Unload
 # ---------------------------
@@ -842,11 +810,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Remove from hass.data
         hass.data[DOMAIN].pop(entry.entry_id, None)
         
-        # Only remove the kill services if this is the *last* config entry for your domain
-        remaining_entries = hass.config_entries.async_entries(DOMAIN)
-        if not remaining_entries:  # or if len(...) == 0
+        # Only remove the kill services if this is the *last* config entry for this domain
+        remaining_entries = [
+            e for e in hass.config_entries.async_entries(DOMAIN)
+            if e.entry_id != entry.entry_id
+        ]
+        if not remaining_entries:
             for service in ["kill_all_streams", "kill_user_streams", "kill_session_stream"]:
-                # Optional: check if service actually exists before removing
                 if hass.services.has_service(DOMAIN, service):
                     hass.services.async_remove(DOMAIN, service)
 

@@ -24,13 +24,19 @@ CONF_IMAGE_PROXY = "image_proxy"
 CONF_ENABLE_IP_GEOLOCATION = "enable_ip_geolocation"
 
 # ---------------------------
-# Configuration option keys
+# Plex configuration keys
 # ---------------------------
 CONF_PLEX_ENABLED = "plex_enabled"
 CONF_PLEX_TOKEN = "plex_token"
 CONF_PLEX_BASEURL = "plex_base_url"
-CONF_PLEX_METADATA = "plex_metadata"
 
-DEFAULT_VERIFY_SSL = False
+
+def format_seconds_to_min_sec(total_seconds: float) -> str:
+    """Convert seconds into 'Mm Ss' format."""
+    total_seconds = int(total_seconds)
+    minutes = total_seconds // 60
+    secs = total_seconds % 60
+    return f"{minutes}m {secs}s"
+
 
 LOGGER = logging.getLogger(__package__)

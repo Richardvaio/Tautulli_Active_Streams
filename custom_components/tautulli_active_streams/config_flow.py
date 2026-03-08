@@ -67,6 +67,11 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     if not server_name:
                         server_name = resp["response"]["data"].get("pms_name", "")
 
+                    # Set unique ID to prevent duplicate entries for the same server
+                    pms_identifier = resp["response"]["data"].get("pms_identifier", url)
+                    await self.async_set_unique_id(pms_identifier)
+                    self._abort_if_unique_id_configured()
+
                     self._flow_data.update({
                         "server_name": server_name,
                         CONF_URL: url,
@@ -110,7 +115,7 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             enable_stats = user_input.get(CONF_ENABLE_STATISTICS, False)
             stats_mtd = user_input.get(CONF_STATS_MONTH_TO_DATE, False)
             stats_interval = user_input.get(CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL)
-            stats_days = DEFAULT_STATISTICS_DAYS if enable_stats else 0
+            stats_days = user_input.get(CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS) if enable_stats else 0
 
             plex_enabled_new = user_input.get("enable_plex_integration", False)
 
@@ -215,8 +220,6 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_STATISTICS_INTERVAL: self._flow_data[CONF_STATISTICS_INTERVAL],
             CONF_STATISTICS_DAYS: self._flow_data[CONF_STATISTICS_DAYS],
             CONF_PLEX_ENABLED: self._flow_data[CONF_PLEX_ENABLED],
-            CONF_PLEX_TOKEN: self._flow_data[CONF_PLEX_TOKEN],
-            CONF_PLEX_BASEURL: self._flow_data[CONF_PLEX_BASEURL],
         }
 
         return self.async_create_entry(
@@ -245,12 +248,6 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         self.options = dict(config_entry.options)
         self._plex_enabled_old = self.options.get(CONF_PLEX_ENABLED, False)
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
-        """Get the options flow."""
-        return TautulliOptionsFlowHandler(config_entry)
-
     async def async_step_init(self, user_input=None):
         """Show toggles. If plex toggled from off => on, go to plex_setup."""
         if user_input is not None:
@@ -272,7 +269,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
                 return await self.async_step_plex_setup()
 
             # else finalize
-            self._update_config_entry_data()  # sync changes into data
+            self._update_config_entry_data()
             return self.async_create_entry(title="", data=self.options)
 
         data_schema = vol.Schema({
@@ -326,9 +323,10 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
                 errors[CONF_PLEX_TOKEN] = "invalid_plex_token"
                 
             if not errors:
-                self.options[CONF_PLEX_TOKEN] = plex_token
+                # Store plex_token in data only (encrypted), not in options
+                self._plex_token_new = plex_token
                 plex_base = user_input.get(CONF_PLEX_BASEURL, "").strip()
-                self.options[CONF_PLEX_BASEURL] = plex_base
+                self._plex_base_new = plex_base
                 self.options[CONF_PLEX_ENABLED] = True
                 
                 # Sync to config entry data before creating entry
@@ -350,6 +348,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         """
         Sync the plex fields from self.options into config_entry.data
         so the sensor code can read them from entry.data.
+        Credentials (plex_token) are stored only in data, never in options.
         """
         # Get the current config entry from the hass instance using entry_id
         config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
@@ -359,11 +358,13 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             
         new_data = dict(config_entry.data)
 
-        # Basic + server_name are mandatory; keep them as is
-        # We only update the Plex fields + toggles
+        # Update Plex fields in data
         new_data[CONF_PLEX_ENABLED] = self.options.get(CONF_PLEX_ENABLED, False)
-        new_data[CONF_PLEX_TOKEN] = self.options.get(CONF_PLEX_TOKEN, "")
-        new_data[CONF_PLEX_BASEURL] = self.options.get(CONF_PLEX_BASEURL, "")
+        new_data[CONF_PLEX_BASEURL] = getattr(self, "_plex_base_new", new_data.get(CONF_PLEX_BASEURL, ""))
+
+        # Only update plex_token if a new one was provided
+        if hasattr(self, "_plex_token_new"):
+            new_data[CONF_PLEX_TOKEN] = self._plex_token_new
 
         self.hass.config_entries.async_update_entry(
             config_entry,

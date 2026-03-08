@@ -3,9 +3,11 @@
     "name": "Tautulli Active Streams",
     "documentation": "https://github.com/Richardvaio/Tautulli_Active_Streams",
     "integration_type": "hub",
+    "iot_class": "local_polling",
     "requirements": [],
-    "dependencies": [],
+    "dependencies": ["device_tracker"],
     "codeowners": ["@Richardvaio"],
     "config_flow": true,
-    "version": "2.4.12"
+    "import_executor": true,
+    "version": "2.5.0"
 }

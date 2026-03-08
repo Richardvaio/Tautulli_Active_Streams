@@ -20,9 +20,24 @@ class TautulliAPI:
         self._api_key = api_key
         self._session = session
         self._verify_ssl = verify_ssl
-        self._timeout = timeout
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
 
         self._base_url = f"{self._url}/api/v2"
+
+    @property
+    def base_url(self) -> str:
+        """Return the Tautulli base URL."""
+        return self._url
+
+    @property
+    def api_key(self) -> str:
+        """Return the Tautulli API key."""
+        return self._api_key
+
+    @property
+    def session(self):
+        """Return the aiohttp session."""
+        return self._session
 
     async def _call_tautulli(self, cmd, params=None, method="GET"):
         """
@@ -35,8 +50,8 @@ class TautulliAPI:
         method = method.upper()
 
         _LOGGER.debug(
-            "TautulliAPI: calling cmd=%s method=%s url=%s params=%s",
-            cmd, method, url, params
+            "TautulliAPI: calling cmd=%s method=%s params=%s",
+            cmd, method, params
         )
 
         try:
