@@ -1,3 +1,4 @@
+import logging
 import time
 from datetime import datetime, timedelta
 
@@ -28,8 +29,9 @@ from .const import (
     GEO_PROVIDER_IP_API,
     is_private_ip,
     format_seconds_to_min_sec,
-    LOGGER as _LOGGER,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = ["sensor", "button"]
 

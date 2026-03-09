@@ -43,6 +43,7 @@
       "plex_token_required": "Plex token is required.",
       "invalid_plex_token": "Invalid Plex token format."
     }
+
   },
   "options": {
     "step": {
@@ -56,6 +57,7 @@
           "geo_provider": "GeoIP Provider (tautulli = MaxMind GeoLite2, ip-api = ip-api.com — typically more accurate).",
           "advanced_attributes": "Include advanced session attributes?",
           "plex_enabled": "Enable Plex integration?",
+          "reconfigure_plex": "Reconfigure Plex token / URL? (Only when Plex is already enabled).",
           "enable_statistics": "Enable Tautulli Statistics?",
           "stats_month_to_date": "Use Month-to-Date? (Ignores day range and starts from the 1st of the current month).",
           "statistics_days": "Number of days to include (ignored when Month-to-Date is enabled).",
@@ -70,6 +72,10 @@
           "plex_base_url": "Plex base URL"
         }
       }
+    },
+    "error": {
+      "plex_token_required": "Plex token is required.",
+      "invalid_plex_token": "Invalid Plex token format."
     }
 
   }

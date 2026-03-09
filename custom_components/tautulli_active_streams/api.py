@@ -4,6 +4,15 @@ import asyncio
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class TautulliConnectionError(Exception):
+    """Raised when Tautulli cannot be reached (timeout, DNS, refused, etc.)."""
+
+
+class TautulliAuthError(Exception):
+    """Raised when Tautulli returns an auth failure (bad API key)."""
+
+
 class TautulliAPI:
     """Handles communication with the Tautulli API."""
     def __init__(self, url, api_key, session, verify_ssl=True, timeout=10):
@@ -133,12 +142,27 @@ class TautulliAPI:
     async def get_server_info(self):
         """
         Validate connection to Tautulli by calling get_server_info.
-        Returns the whole response by default.
+        Raises TautulliConnectionError if Tautulli cannot be reached.
+        Raises TautulliAuthError if the API key is invalid.
+        Returns the full response dict on success.
         """
-        resp = await self._call_tautulli("get_server_info", method="GET")
-        if resp.get("response", {}).get("result") == "success":
+        try:
+            resp = await self._call_tautulli("get_server_info", method="GET")
+        except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as err:
+            raise TautulliConnectionError(f"Cannot connect to Tautulli: {err}") from err
+
+        if not resp:
+            raise TautulliConnectionError("Empty response from Tautulli — check URL and network")
+
+        result = resp.get("response", {}).get("result")
+        if result == "success":
             return resp
-        return {}
+
+        # Tautulli returns result=error with a message for bad keys
+        msg = resp.get("response", {}).get("message", "Unknown error")
+        if "invalid" in msg.lower() or "api" in msg.lower():
+            raise TautulliAuthError(f"Invalid API key: {msg}")
+        raise TautulliConnectionError(f"Tautulli error: {msg}")
 
 
     async def get_history(self, **params):

@@ -1,7 +1,7 @@
+import logging
+
 import aiohttp
-import asyncio
 import voluptuous as vol
-from typing import Any, Dict  # Make sure Any is imported
 from homeassistant import config_entries
 from homeassistant.config_entries import FlowResult
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL
@@ -29,9 +29,10 @@ from .const import (
     CONF_PLEX_ENABLED,
     CONF_PLEX_TOKEN,
     CONF_PLEX_BASEURL,
-    LOGGER,
 )
-from .api import TautulliAPI
+from .api import TautulliAPI, TautulliConnectionError, TautulliAuthError
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -58,35 +59,34 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 resp = await api.get_server_info()
-                if not isinstance(resp, dict) or "response" not in resp:
-                    raise ValueError(f"Malformed API response: {resp}")
 
-                if resp["response"].get("result") != "success":
-                    errors["base"] = "invalid_api_key"
-                else:
-                    server_name = user_input.get("server_name", "").strip()
-                    if not server_name:
-                        server_name = resp["response"]["data"].get("pms_name", "")
+                server_name = user_input.get("server_name", "").strip()
+                if not server_name:
+                    server_name = resp["response"]["data"].get("pms_name", "")
 
-                    # Set unique ID to prevent duplicate entries for the same server
-                    pms_identifier = resp["response"]["data"].get("pms_identifier", url)
-                    await self.async_set_unique_id(pms_identifier)
-                    self._abort_if_unique_id_configured()
+                # Set unique ID to prevent duplicate entries for the same server
+                pms_identifier = resp["response"]["data"].get("pms_identifier", url)
+                await self.async_set_unique_id(pms_identifier)
+                self._abort_if_unique_id_configured()
 
-                    self._flow_data.update({
-                        "server_name": server_name,
-                        CONF_URL: url,
-                        CONF_API_KEY: user_input[CONF_API_KEY],
-                        CONF_VERIFY_SSL: verify_ssl,
-                    })
-                    self._plex_base_from_tautulli = resp["response"]["data"].get("pms_url", "")
+                self._flow_data.update({
+                    "server_name": server_name,
+                    CONF_URL: url,
+                    CONF_API_KEY: user_input[CONF_API_KEY],
+                    CONF_VERIFY_SSL: verify_ssl,
+                })
+                self._plex_base_from_tautulli = resp["response"]["data"].get("pms_url", "")
 
-                    return await self.async_step_advanced()
+                return await self.async_step_advanced()
 
+            except TautulliAuthError:
+                errors["base"] = "invalid_api_key"
+            except TautulliConnectionError:
+                errors["base"] = "cannot_connect"
             except aiohttp.ClientConnectionError:
                 errors["base"] = "cannot_connect"
             except Exception as e:
-                LOGGER.exception("Error in Tautulli config flow user step: %s", e)
+                _LOGGER.exception("Error in Tautulli config flow user step: %s", e)
                 errors["base"] = "unknown"
 
         return self._show_tautulli_form(errors, user_input)
@@ -268,7 +268,10 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             self.options[CONF_PLEX_ENABLED] = plex_enabled_new
 
             # Only go to plex_setup when toggling Plex from off → on
+            # or when user explicitly chose to reconfigure Plex
             if plex_enabled_new and not self._plex_enabled_old:
+                return await self.async_step_plex_setup()
+            if user_input.get("reconfigure_plex", False) and plex_enabled_new:
                 return await self.async_step_plex_setup()
 
             # Plex already on (no change) or disabled — finalize
@@ -293,6 +296,9 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
 
             vol.Optional(
                 CONF_PLEX_ENABLED, default=self.options.get(CONF_PLEX_ENABLED, False)
+            ): bool,
+            vol.Optional(
+                "reconfigure_plex", default=False
             ): bool,
 
             vol.Optional(
@@ -362,7 +368,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         # Get the current config entry from the hass instance using entry_id
         config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
         if not config_entry:
-            LOGGER.error("Could not find config entry with id %s", self.entry_id)
+            _LOGGER.error("Could not find config entry with id %s", self.entry_id)
             return
             
         new_data = dict(config_entry.data)

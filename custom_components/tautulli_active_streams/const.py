@@ -1,4 +1,3 @@
-import logging
 import ipaddress
 
 DOMAIN = "tautulli_active_streams"
@@ -45,9 +44,6 @@ def format_seconds_to_min_sec(total_seconds: float) -> str:
     if hours > 0:
         return f"{hours}h {minutes}m {secs}s"
     return f"{minutes}m {secs}s"
-
-
-LOGGER = logging.getLogger(__package__)
 
 
 def is_private_ip(ip: str) -> bool:

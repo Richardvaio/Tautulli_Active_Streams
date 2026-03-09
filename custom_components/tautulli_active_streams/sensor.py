@@ -14,6 +14,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util.dt import now as ha_now
 import aiohttp
 import xml.etree.ElementTree as ET
 
@@ -182,6 +183,20 @@ async def async_setup_entry(hass, entry, async_add_entities):
     # 1) Create one guaranteed session sensor (Plex Session 1)
     session_sensors = [TautulliStreamSensor(sessions_coordinator, entry, 0)]
 
+    # Shared set of active stream sensors for the shared 1-second timer
+    active_stream_sensors: set[TautulliStreamSensor] = set()
+    data["active_stream_sensors"] = active_stream_sensors
+
+    async def _shared_tick(now):
+        """Single 1-second timer that updates all active stream sensors."""
+        for sensor in list(active_stream_sensors):
+            await sensor._update_every_second(now)
+
+    unsub_shared_timer = async_track_time_interval(
+        hass, _shared_tick, timedelta(seconds=1)
+    )
+    data.setdefault("session_unsub_listeners", []).append(unsub_shared_timer)
+
     # Track current sensor count for dynamic add/remove
     current_sensor_count = [1]  # use list to allow mutation in closure
 
@@ -326,11 +341,13 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         self._paused_start = None
         self._paused_duration_sec = 0
         self._paused_duration_str = "0m 0s"
-        self._unsub_timer = None
 
         # new: track credits
         self._credits_offset_ms = None  # raw credits offset in milliseconds
         self._in_credits = False
+
+        # Plex metadata stored per-sensor (avoids mutating shared coordinator data)
+        self._plex_metadata = {}
 
         # Add new tracking variables
         self._last_state = STATE_OFF
@@ -353,20 +370,22 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
     async def async_added_to_hass(self):
         """
         Called when this sensor is added to HA.
-        We set up a per-second timer to update pause durations and credits.
+        Register with the shared per-second timer.
         """
         await super().async_added_to_hass()
-        self._unsub_timer = async_track_time_interval(
-            self.hass, self._update_every_second, timedelta(seconds=1)
-        )
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        active_set = entry_data.get("active_stream_sensors")
+        if active_set is not None:
+            active_set.add(self)
 
     async def async_will_remove_from_hass(self):
         """
-        Called when removing the sensor, so we cancel our timer.
+        Called when removing the sensor. Unregister from the shared timer.
         """
-        if self._unsub_timer is not None:
-            self._unsub_timer()
-            self._unsub_timer = None
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        active_set = entry_data.get("active_stream_sensors")
+        if active_set is not None:
+            active_set.discard(self)
         await super().async_will_remove_from_hass()
 
     async def _update_every_second(self, now):
@@ -408,6 +427,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             self._auth_warning_emitted = False
             self._credits_offset_ms = None
             self._in_credits = False
+            self._plex_metadata = {}
 
         # Only write state if something changed (avoid 300 DB writes/min)
         new_state = self.native_value
@@ -465,9 +485,9 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             # Store credits offset as integer milliseconds for future checks
             self._credits_offset_ms = credits_offset if credits_offset else None
 
-            # Update session metadata in coordinator
-            if metadata and "sessions" in self.coordinator.data:
-                self.coordinator.data["sessions"][self._index].update(metadata)
+            # Store metadata locally (never mutate shared coordinator data)
+            if metadata:
+                self._plex_metadata = metadata
 
             # Mark this stream as attempted, even when metadata is empty.
             self._metadata_fetched = True
@@ -534,6 +554,10 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
             return {}
 
         session = sessions[self._index]
+
+        # Merge Plex metadata (stored per-sensor) into session view
+        if self._plex_metadata:
+            session = {**session, **self._plex_metadata}
 
         base_url = self._entry.data.get(CONF_URL)
         api_key = self._entry.data.get(CONF_API_KEY)
@@ -604,36 +628,39 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         attributes["stream_audio_channel_layout"] = session.get("stream_audio_channel_layout")
         attributes["stream_audio_bitrate"] = session.get("stream_audio_bitrate")
 
+        # Stream timing — always available so Lovelace cards work without advanced mode
+        attributes["stream_start_time"] = session.get("start_time")
+
+        if session.get("stream_duration"):
+            total_ms = float(session["stream_duration"])
+            hours = int(total_ms // 3600000)
+            minutes = int((total_ms % 3600000) // 60000)
+            seconds = int((total_ms % 60000) // 1000)
+            attributes["stream_duration"] = f"{hours}:{minutes:02d}:{seconds:02d}"
+        else:
+            attributes["stream_duration"] = None
+
+        if session.get("view_offset") and session.get("stream_duration"):
+            remain_ms = float(session["stream_duration"]) - float(session["view_offset"])
+            remain_seconds = remain_ms / 1000
+            remain_hours = int(remain_seconds // 3600)
+            remain_minutes = int((remain_seconds % 3600) // 60)
+            remain_secs = int(remain_seconds % 60)
+            attributes["stream_remaining"] = f"{remain_hours}:{remain_minutes:02d}:{remain_secs:02d}"
+
+            eta = datetime.now(tz=ha_now().tzinfo) + timedelta(seconds=remain_seconds)
+            hour_12 = eta.strftime("%I").lstrip("0") or "12"
+            minute = eta.strftime("%M")
+            ampm = eta.strftime("%p").lower()
+            attributes["stream_eta"] = f"{hour_12}:{minute} {ampm}"
+        else:
+            attributes["stream_remaining"] = None
+            attributes["stream_eta"] = None
+
         # If advanced is off, return now
         if advanced:
 
             # Advanced is ON, so add more
-            if session.get("stream_duration"):
-                total_ms = float(session["stream_duration"])
-                hours = int(total_ms // 3600000)
-                minutes = int((total_ms % 3600000) // 60000)
-                seconds = int((total_ms % 60000) // 1000)
-                formatted_duration = f"{hours}:{minutes:02d}:{seconds:02d}"
-            else:
-                formatted_duration = None
-
-            if session.get("view_offset") and session.get("stream_duration"):
-                remain_ms = float(session["stream_duration"]) - float(session["view_offset"])
-                remain_seconds = remain_ms / 1000
-                remain_hours = int(remain_seconds // 3600)
-                remain_minutes = int((remain_seconds % 3600) // 60)
-                remain_secs = int(remain_seconds % 60)
-                formatted_remaining = f"{remain_hours}:{remain_minutes:02d}:{remain_secs:02d}"
-
-                eta = datetime.now() + timedelta(seconds=remain_seconds)
-                hour_12 = eta.strftime("%I").lstrip("0") or "12"
-                minute = eta.strftime("%M")
-                ampm = eta.strftime("%p").lower()
-                formatted_eta = f"{hour_12}:{minute} {ampm}"
-            else:
-                formatted_remaining = None
-                formatted_eta = None
-
             attributes.update({
                 "user_friendly_name": session.get("friendly_name"),
                 "username": session.get("username"),
@@ -665,11 +692,6 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "transcode_throttled": session.get("transcode_throttled"),
                 "transcode_progress": session.get("transcode_progress"),
                 "transcode_speed": session.get("transcode_speed"),
-                "stream_start_time": session.get("start_time"),
-                "stream_duration": formatted_duration,
-                "stream_remaining": formatted_remaining,
-                "stream_eta": formatted_eta,
-                "stream_video_resolution": session.get("stream_video_resolution"),
                 "stream_container": session.get("stream_container"),
                 "stream_bitrate": session.get("stream_bitrate"),
                 "stream_video_bitrate": session.get("stream_video_bitrate"),
@@ -854,7 +876,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                         elif not isinstance(timestamp, (int, float)):
                             continue
                         try:
-                            date = datetime.fromtimestamp(timestamp)
+                            date = datetime.fromtimestamp(timestamp, tz=ha_now().tzinfo)
                             field_name = field[0].lower() + field[1:]
                             attributes[field_name] = date.strftime("%Y-%m-%d %H:%M:%S")
                         except (ValueError, OSError) as err:
@@ -944,6 +966,7 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
             filtered_sessions.append({
                 "username": (s.get("username") or "").lower(),
                 "user": (s.get("user") or "").lower(),
+                "state": (s.get("state") or "").lower(),
                 "full_title": s.get("full_title"),
                 "stream_start_time": s.get("start_time"),
                 "start_time_raw": s.get("start_time_raw"),
@@ -1032,6 +1055,7 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
             # --- Watch Times --- Weekday & Gaps ---
             "days_since_last_watch": self._stats.get("days_since_last_watch"),
             "preferred_watch_time": self._stats.get("preferred_watch_time", ""),
+            "preferred_watch_day": self._stats.get("preferred_watch_day", ""),
             "weekday_plays": self._stats.get("weekday_plays", []),
             "watched_morning": self._stats.get("watched_morning", 0),
             "watched_afternoon": self._stats.get("watched_afternoon", 0),
