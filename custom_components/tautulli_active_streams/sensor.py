@@ -517,6 +517,15 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
         attributes["transcode_decision"] = session.get("transcode_decision")
         attributes["stream_paused_duration"] = self._paused_duration_str
         attributes["live"] = session.get("live")
+        attributes["grandparent_title"] = session.get("grandparent_title")
+        attributes["parent_title"] = session.get("parent_title")
+        attributes["title"] = session.get("title")
+        attributes["audio_codec"] = session.get("audio_codec")
+        attributes["audio_channel_layout"] = session.get("audio_channel_layout")
+        attributes["audio_bitrate"] = session.get("audio_bitrate")
+        attributes["stream_audio_codec"] = session.get("stream_audio_codec")
+        attributes["stream_audio_channel_layout"] = session.get("stream_audio_channel_layout")
+        attributes["stream_audio_bitrate"] = session.get("stream_audio_bitrate")
 
         # If advanced is off, return now
         if advanced:
@@ -556,8 +565,6 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "library_name": session.get("library_name"),
                 "channel_call_sign": session.get("channel_call_sign"),
                 "channel_title": session.get("channel_title"),
-                "grandparent_title": session.get("grandparent_title"),
-                "title": session.get("title"),
                 "container": session.get("container"),
                 "aspect_ratio": session.get("aspect_ratio"),
                 "video_codec": session.get("video_codec"),
@@ -566,11 +573,8 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "video_dovi_profile": session.get("video_dovi_profile"),
                 "video_dynamic_range": session.get("video_dynamic_range"),
                 "video_color_space": session.get("video_color_space"),
-                "audio_codec": session.get("audio_codec"),
                 "audio_channels": session.get("audio_channels"),
-                "audio_channel_layout": session.get("audio_channel_layout"),
                 "audio_profile": session.get("audio_profile"),
-                "audio_bitrate": session.get("audio_bitrate"),
                 "audio_language": session.get("audio_language"),
                 "audio_language_code": session.get("audio_language_code"),
                 "subtitle_language": session.get("subtitle_language"),
@@ -597,10 +601,7 @@ class TautulliStreamSensor(CoordinatorEntity, SensorEntity):
                 "stream_video_full_resolution": session.get("stream_video_full_resolution"),
                 "stream_video_dovi_profile": session.get("stream_video_dovi_profile"),
                 "stream_video_decision": session.get("stream_video_decision"),
-                "stream_audio_bitrate": session.get("stream_audio_bitrate"),
-                "stream_audio_codec": session.get("stream_audio_codec"),
                 "stream_audio_channels": session.get("stream_audio_channels"),
-                "stream_audio_channel_layout": session.get("stream_audio_channel_layout"),
                 "stream_audio_language": session.get("stream_audio_language"),
                 "stream_audio_language_code": session.get("stream_audio_language_code"),
             })
