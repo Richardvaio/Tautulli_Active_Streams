@@ -1,0 +1,80 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tautulli Active Streams",
+        "description": "To find your API key, open the Tautulli webpage and navigate to **Settings** → **Web Interface**. The API key is at the bottom of that page.\n\n**Examples of URL formats:**\n- **Local (HTTP)**: `http://192.168.0.10:8181`\n- **Remote / Reverse Proxy (HTTPS)**: `https://tautulli.example.com`",
+        "data": {
+          "server_name": "Enter a friendly name for your Tautulli server (optional).",
+          "url": "Enter the full URL of your Tautulli server (including port if necessary).",
+          "api_key": "API key (found in Tautulli settings).",
+          "verify_ssl": "Enable SSL verification? Disable if using a self-signed certificate."
+        }
+      },
+      "advanced": {
+        "title": "Tautulli Advanced Setup",
+        "description": "Configure how often to poll Tautulli, how many sensors to create, and whether to enable watch-history statistics. You can also enable Plex integration here.",
+        "data": {
+          "session_interval": "How often (in seconds) to refresh active streams?",
+          "image_proxy": "Use Image Proxy? (Proxy images via Home Assistant).",
+          "enable_ip_geolocation": "Enable IP Geolocation? (Use IP-to-location mapping from Tautulli).",
+          "geo_provider": "GeoIP Provider (tautulli = MaxMind GeoLite2, ip-api = ip-api.com — typically more accurate).",
+          "advanced_attributes": "Enable Advanced Attributes? (Extra session details).",
+          "enable_plex_integration": "Enable Plex integration for advanced features?",
+          "enable_statistics": "Enable Tautulli Statistics?",
+          "stats_month_to_date": "Use Month-to-Date? (Ignores day range and starts from the 1st of the current month).",
+          "statistics_days": "Number of days to include (ignored when Month-to-Date is enabled).",
+          "statistics_interval": "How often (in seconds) to refresh watch-history for statistics?"
+        }
+      },
+      "plex": {
+        "title": "Plex Integration Setup",
+        "description": "Enter your Plex information for advanced features. (You can find your Plex token by checking your Plex server logs or browser network requests.)",
+        "data": {
+          "plex_token": "Plex Token",
+          "plex_base_url": "Plex base URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to Tautulli. Please check your URL, API key, and network connectivity.",
+      "invalid_api_key": "The API key appears to be invalid. Please double-check it in Tautulli's Web Interface.",
+      "unknown": "An unexpected error occurred. Please check your logs for more details.",
+      "plex_token_required": "Plex token is required.",
+      "invalid_plex_token": "Invalid Plex token format."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tautulli Active Streams Options",
+        "description": "Advanced settings. Changes apply seamlessly without a Home Assistant restart.",
+        "data": {
+          "session_interval": "API update frequency for active streams (seconds).",
+          "image_proxy": "Use Image Proxy? (Proxy images via Home Assistant).",
+          "enable_ip_geolocation": "Enable IP Geolocation?",
+          "geo_provider": "GeoIP Provider (tautulli = MaxMind GeoLite2, ip-api = ip-api.com — typically more accurate).",
+          "advanced_attributes": "Include advanced session attributes?",
+          "plex_enabled": "Enable Plex integration?",
+          "reconfigure_plex": "Reconfigure Plex token / URL? (Only when Plex is already enabled).",
+          "enable_statistics": "Enable Tautulli Statistics?",
+          "stats_month_to_date": "Use Month-to-Date? (Ignores day range and starts from the 1st of the current month).",
+          "statistics_days": "Number of days to include (ignored when Month-to-Date is enabled).",
+          "statistics_interval": "API update frequency for watch-history stats (seconds)."
+        }
+      },
+      "plex_setup": {
+        "title": "Plex Integration Setup",
+        "description": "Provide or update your Plex token and optional base URL for advanced features such as credit detection.",
+        "data": {
+          "plex_token": "Plex Token",
+          "plex_base_url": "Plex base URL"
+        }
+      }
+    },
+    "error": {
+      "plex_token_required": "Plex token is required.",
+      "invalid_plex_token": "Invalid Plex token format."
+    }
+  }
+}
