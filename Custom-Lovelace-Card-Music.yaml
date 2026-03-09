@@ -1,14 +1,15 @@
 ###################################################################
 #
-#  Movies & TV Shows - Lovelace Card
+#  Music Only - Lovelace Card
 #  Last Updated: 09.03.2026
 #
-#  Excludes music sessions (media_type == 'track')
+#  Only shows active Plex sessions where media_type == 'track'
 #  Requires: auto-entities, button-card, bar-card, card-mod
 #
 ###################################################################
 
 type: custom:auto-entities
+show_empty: false
 filter:
   exclude:
     - options: {}
@@ -22,11 +23,11 @@ filter:
     - options: {}
       attributes:
         local: null
-    - options: {}
+  include:
+    - entity_id: "*plex_session_*"
       attributes:
         media_type: track
-  include:
-    - options:
+      options:
         entity: this.entity_id
         type: custom:button-card
         tap_action:
@@ -51,8 +52,11 @@ filter:
                     margin: -1px 3px -6px 3px;
                   }
                   ha-card img {
-                    min-height: 80px;
-                    min-width: 80px;
+                    min-height: 110px;
+                    min-width: 110px;
+                    width: 110px;
+                    height: 110px;
+                    object-fit: cover;
                   }
           bar:
             card:
@@ -70,7 +74,7 @@ filter:
               color: |
                 [[[
                   if (states[variables.entity].state == 'playing') {
-                    return '#2986cc';
+                    return '#1DB954';
                   } else if (states[variables.entity].state == 'paused') {
                     return '#e49f29; animation: blink 1.5s linear infinite;'; 
                   } else if (states[variables.entity].state == 'buffering') {
@@ -85,11 +89,15 @@ filter:
                   if (!ent) return '';
 
                   const state = (ent.state || '').toLowerCase();
-                  const nice =
+                  const idx = ent.attributes?.media_index;
+
+                  let nice =
                     state === 'playing' ? 'Playing' :
                     state === 'paused' ? 'Paused' :
                     state === 'buffering' ? 'Buffering' :
                     state.charAt(0).toUpperCase() + state.slice(1);
+
+                  if (idx) nice += ' track ' + idx;
 
                   if (state !== 'paused') return nice;
 
@@ -154,17 +162,31 @@ filter:
             ]]]
           title: |
             [[[
-              if (states[variables.entity].state == 'playing') {
-                return "<ha-icon icon='mdi:play' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> " + states[variables.entity].attributes.full_title;
-              } else if (states[variables.entity].state == 'paused') {
-                return "<ha-icon icon='mdi:pause' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> " + states[variables.entity].attributes.full_title;
-              } else {
-                return states[variables.entity].attributes.full_title;
+              var a = states[variables.entity].attributes;
+              var s = states[variables.entity].state;
+              var icon = '';
+              if (s == 'playing') {
+                icon = "<ha-icon icon='mdi:play' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> ";
+              } else if (s == 'paused') {
+                icon = "<ha-icon icon='mdi:pause' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> ";
               }
+              var artist = a.grandparent_title || '';
+              var album = a.parent_title || '';
+              if (album && album != artist) {
+                return icon + artist + ' — ' + album;
+              }
+              return icon + artist;
             ]]]
           stream: |
             [[[
-              return states[variables.entity].attributes.transcode_decision + " - " + states[variables.entity].attributes.stream_video_resolution;
+              var a = states[variables.entity].attributes;
+              var codec = (a.stream_audio_codec || a.audio_codec || '').toUpperCase();
+              var layout = a.stream_audio_channel_layout || a.audio_channel_layout || '';
+              var bitrate = a.stream_audio_bitrate || a.audio_bitrate || '';
+              var detail = codec;
+              if (layout) detail += ' ' + layout;
+              if (bitrate) detail += ' ' + bitrate + 'kbps';
+              return detail;
             ]]]
           product: |
             [[[
@@ -174,16 +196,9 @@ filter:
             ]]]
           media_detail: |
             [[[
-              if(states[variables.entity].attributes.media_type == 'movie') {
-                return "<ha-icon icon='mdi:filmstrip' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> (" + states[variables.entity].attributes.year + ")";
-              } else {
-                return "<ha-icon icon='mdi:television-classic' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> S" + states[variables.entity].attributes.parent_media_index + " • E" + states[variables.entity].attributes.media_index;
-              }
-            ]]]
-          stream_eta: |
-            [[[
-              var stream_eta = states[variables.entity].attributes.stream_eta;
-              return 'ETA: ' + '<i>' + stream_eta + '</i>';
+              var a = states[variables.entity].attributes;
+              var track = a.title || a.full_title || '';
+              return "<ha-icon icon='mdi:music' style='width: 15px; height: 15px; position: relative; top: -2px;'></ha-icon> " + track;
             ]]]
           stream_remaining: |
             [[[
@@ -268,7 +283,7 @@ filter:
             title:
               - text-transform: capitalize
               - text-align: start
-              - font-size: 26px
+              - font-size: 18px
               - margin-top: "-4px"
               - margin-bottom: 4px
             stream:
@@ -285,11 +300,6 @@ filter:
               - text-transform: uppercase
               - text-align: start
               - font-size: 15px
-            stream_eta:
-              - text-transform: uppercase
-              - text-align: end
-              - font-size: 11px
-              - margin-bottom: "-15px"
             stream_remaining:
               - font-weight: 200
               - letter-spacing: 0.4px
@@ -310,12 +320,11 @@ filter:
             - grid-template-areas: |
                 "picture product user"
                 "picture title title"
-                "picture media_detail stream_eta"
+                "picture media_detail media_detail"
                 "picture bar stream_remaining"
                 "picture stream bandwidth"
-            - grid-template-columns: 1fr 2fr 3fr
+            - grid-template-columns: 120px 2fr 3fr
             - grid-gap: 5px 3px
-      entity_id: "*plex_session_*"
 card:
   type: grid
   columns: 1
