@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -41,7 +42,7 @@ async def _fetch_plex_metadata(plex_base_url, plex_token, rating_key, session):
     headers = {"X-Plex-Token": plex_token}
     try:
         async with session.get(
-            url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)
+            url, headers=headers, timeout=aiohttp.ClientTimeout(total=5)
         ) as resp:
             if resp.status != 200:
                 _LOGGER.debug(
@@ -189,8 +190,12 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
     async def _shared_tick(now):
         """Single 1-second timer that updates all active stream sensors."""
-        for sensor in list(active_stream_sensors):
-            await sensor._update_every_second(now)
+        sensors = [s for s in list(active_stream_sensors) if s.hass and s.entity_id]
+        if sensors:
+            await asyncio.gather(
+                *(sensor._update_every_second(now) for sensor in sensors),
+                return_exceptions=True,
+            )
 
     unsub_shared_timer = async_track_time_interval(
         hass, _shared_tick, timedelta(seconds=1)
@@ -229,6 +234,11 @@ async def async_setup_entry(hass, entry, async_add_entities):
                 uid = f"plex_session_{i + 1}_{entry.entry_id}_tautulli"
                 entity_id = registry.async_get_entity_id("sensor", DOMAIN, uid)
                 if entity_id:
+                    # Remove from active set immediately to prevent stale tick
+                    for s in list(active_stream_sensors):
+                        if s._attr_unique_id == uid:
+                            active_stream_sensors.discard(s)
+                            break
                     registry.async_remove(entity_id)
                     _LOGGER.debug("Removed session sensor: %s", entity_id)
             current_sensor_count[0] = target
@@ -964,8 +974,8 @@ class TautulliDiagnosticSensor(CoordinatorEntity, SensorEntity):
         filtered_sessions = []
         for s in sessions:
             filtered_sessions.append({
-                "username": (s.get("username") or "").lower(),
-                "user": (s.get("user") or "").lower(),
+                "username": s.get("username") or "",
+                "user": s.get("user") or "",
                 "state": (s.get("state") or "").lower(),
                 "full_title": s.get("full_title"),
                 "stream_start_time": s.get("start_time"),
@@ -1059,8 +1069,8 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
             "weekday_plays": self._stats.get("weekday_plays", []),
             "watched_morning": self._stats.get("watched_morning", 0),
             "watched_afternoon": self._stats.get("watched_afternoon", 0),
-            "watched_midday": self._stats.get("watched_midday", 0),
             "watched_evening": self._stats.get("watched_evening", 0),
+            "watched_night": self._stats.get("watched_night", 0),
             
             # --- Transcode / Playback Types ---
             "transcode_count": self._stats.get("transcode_count", 0),

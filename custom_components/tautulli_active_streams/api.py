@@ -56,6 +56,7 @@ class TautulliAPI:
     async def _call_tautulli(self, cmd, params=None, method="GET"):
         """
         Generic helper to call any Tautulli API command.
+        Raises TautulliConnectionError on network/timeout failures.
         """
         if params is None:
             params = {}
@@ -70,7 +71,6 @@ class TautulliAPI:
 
         try:
             if method == "POST":
-                # Some Tautulli commands might require POST in the future
                 async with self._session.post(
                     url,
                     data=params,
@@ -81,13 +81,14 @@ class TautulliAPI:
                         try:
                             return await response.json()
                         except Exception as json_err:
-                            _LOGGER.warning("Invalid JSON from Tautulli: %s", json_err)
-                            return {}
+                            raise TautulliConnectionError(
+                                f"Invalid JSON from Tautulli for {cmd}: {json_err}"
+                            ) from json_err
                     else:
-                        _LOGGER.warning("Non-200 status from Tautulli POST: %s", response.status)
-                        return {}
+                        raise TautulliConnectionError(
+                            f"Non-200 status from Tautulli POST {cmd}: {response.status}"
+                        )
             else:
-                # Default to GET
                 async with self._session.get(
                     url,
                     params=params,
@@ -98,26 +99,35 @@ class TautulliAPI:
                         try:
                             return await response.json()
                         except Exception as json_err:
-                            _LOGGER.warning("Invalid JSON from Tautulli: %s", json_err)
-                            return {}
+                            raise TautulliConnectionError(
+                                f"Invalid JSON from Tautulli for {cmd}: {json_err}"
+                            ) from json_err
                     else:
-                        _LOGGER.warning("Non-200 status from Tautulli GET: %s", response.status)
-                        return {}
-        except asyncio.TimeoutError:
-            _LOGGER.warning(
-                "Tautulli API request '%s' timed out after %s seconds.",
-                cmd, self._timeout.total
-            )
-            return {}
-        except Exception as err:
-            # Sanitize the error message to avoid leaking the API key
+                        raise TautulliConnectionError(
+                            f"Non-200 status from Tautulli GET {cmd}: {response.status}"
+                        )
+        except TautulliConnectionError:
+            raise  # Re-raise our own exceptions
+        except asyncio.TimeoutError as err:
+            raise TautulliConnectionError(
+                f"Tautulli API request '{cmd}' timed out after {self._timeout.total}s"
+            ) from err
+        except (aiohttp.ClientError, OSError) as err:
             err_msg = str(err).replace(self._api_key, "[REDACTED]")
-            _LOGGER.error("Exception calling Tautulli %s: %s", cmd, err_msg)
-            return {}
+            raise TautulliConnectionError(
+                f"Connection error calling Tautulli {cmd}: {err_msg}"
+            ) from err
+        except Exception as err:
+            err_msg = str(err).replace(self._api_key, "[REDACTED]")
+            _LOGGER.error("Unexpected error calling Tautulli %s: %s", cmd, err_msg)
+            raise TautulliConnectionError(
+                f"Unexpected error calling Tautulli {cmd}: {err_msg}"
+            ) from err
 
     async def get_activity(self):
         """
         Retrieve active session data from Tautulli.
+        Raises TautulliConnectionError if Tautulli cannot be reached.
         """
         resp = await self._call_tautulli("get_activity", method="GET")
         if not resp:
@@ -146,10 +156,8 @@ class TautulliAPI:
         Raises TautulliAuthError if the API key is invalid.
         Returns the full response dict on success.
         """
-        try:
-            resp = await self._call_tautulli("get_server_info", method="GET")
-        except (asyncio.TimeoutError, aiohttp.ClientError, OSError) as err:
-            raise TautulliConnectionError(f"Cannot connect to Tautulli: {err}") from err
+        # _call_tautulli raises TautulliConnectionError on network failures
+        resp = await self._call_tautulli("get_server_info", method="GET")
 
         if not resp:
             raise TautulliConnectionError("Empty response from Tautulli — check URL and network")
@@ -168,6 +176,7 @@ class TautulliAPI:
     async def get_history(self, **params):
         """
         Retrieve history data from Tautulli.
+        Raises TautulliConnectionError if Tautulli cannot be reached.
         """
         resp = await self._call_tautulli("get_history", params=params, method="GET")
         if not resp:
@@ -194,7 +203,15 @@ class TautulliAPI:
             return {}
         
     async def terminate_session(self, session_id, message=""):
-        """Kill a Tautulli session by session_id."""
+        """Kill a Tautulli session by session_id.
+
+        Returns True on success, raises on failure.
+        """
         params = {"session_id": session_id, "message": message}
         resp = await self._call_tautulli("terminate_session", params=params, method="GET")
-        return resp
+        result = resp.get("response", {}).get("result")
+        if result != "success":
+            msg = resp.get("response", {}).get("message", "Unknown error")
+            _LOGGER.warning("terminate_session %s failed: %s", session_id, msg)
+            return False
+        return True

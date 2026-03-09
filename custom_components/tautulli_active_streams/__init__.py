@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
@@ -117,13 +118,25 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
                 s["stream_paused_duration_sec"] = 0
                 s["stream_paused_duration"] = "0m 0s"
 
-        # If IP geolocation is on => do lookups
+        # If IP geolocation is on => do lookups concurrently
         if self.config_entry.options.get(CONF_ENABLE_IP_GEOLOCATION, False):
-            for s in sessions:
+            # Collect sessions needing lookups
+            lookup_tasks = []
+            lookup_indices = []
+            for idx, s in enumerate(sessions):
                 ip = s.get("ip_address_public") or s.get("ip_address")
                 if ip and not is_private_ip(ip):
-                    # call the geo cache
-                    geo_data = await self._geo_cache.lookup_ip(self.hass, ip)
+                    lookup_tasks.append(self._geo_cache.lookup_ip(self.hass, ip))
+                    lookup_indices.append(idx)
+
+            if lookup_tasks:
+                results = await asyncio.gather(*lookup_tasks, return_exceptions=True)
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        _LOGGER.debug("GeoIP lookup failed: %s", result)
+                        continue
+                    s = sessions[lookup_indices[i]]
+                    geo_data = result
                     s["geo_city"] = geo_data.get("city", "Unknown")
                     s["geo_code"] = geo_data.get("code")
                     s["geo_continent"] = geo_data.get("continent")
@@ -234,8 +247,8 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
                     "streams_count": 0,
                     "last_transcode_ts": 0,  # Track the timestamp of the last transcode
                     "transcode_devices_map": {},
+                    "watched_night": 0,
                     "watched_morning": 0,
-                    "watched_midday": 0,
                     "watched_afternoon": 0,
                     "watched_evening": 0,
                     "lan_plays": 0,
@@ -336,9 +349,9 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
                 dt_obj = datetime.fromtimestamp(started_ts, tz=ha_now().tzinfo)
                 hour = dt_obj.hour
                 if 0 <= hour < 6:
-                    stats["watched_morning"] += 1
+                    stats["watched_night"] += 1
                 elif 6 <= hour < 12:
-                    stats["watched_midday"] += 1
+                    stats["watched_morning"] += 1
                 elif 12 <= hour < 18:
                     stats["watched_afternoon"] += 1
                 else:
@@ -411,8 +424,8 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             time_map = {
                 "morning": stats["watched_morning"],
                 "afternoon": stats["watched_afternoon"],
-                "midday": stats["watched_midday"],
                 "evening": stats["watched_evening"],
+                "night": stats["watched_night"],
             }
             best_time = max(time_map, key=time_map.get)
             stats["preferred_watch_time"] = best_time
@@ -536,7 +549,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             stats["geo_continent"] = continent if continent else "Unknown"
             stats["geo_postal_code"] = postal_code if postal_code else "Unknown"
             stats["geo_timezone"] = timezone if timezone else "Unknown"
-            stats["geo_accuracy"] = accuracy if accuracy else "Unknown"
+            stats["geo_accuracy"] = accuracy if accuracy is not None else None
             # If you also want lat/lon stored:
             stats["geo_latitude"] = lat if lat is not None else None
             stats["geo_longitude"] = lon if lon is not None else None
@@ -567,8 +580,10 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
                 {
                     "dev_id": dev_id,
                     "host_name": f"{username}: Tautulli",
-                    "gps": (lat, lon) if lat is not None and lon is not None else (0, 0),
-                    "source_type": "gps",
+                    **({
+                        "gps": (lat, lon),
+                        "source_type": "gps",
+                    } if lat is not None and lon is not None else {}),
                     "attributes": attributes,
                 },
                 blocking=False,
@@ -714,8 +729,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # If stats are on, do an immediate refresh for watch history
     if entry.options.get(CONF_ENABLE_STATISTICS, False):
-        # 4) Remove user sensors for all users (Wipe them all)
-        await async_remove_all_user_stats_sensors(hass, entry)  # <-- FIXED
         await history_coordinator.async_request_refresh()
 
     # 4) Store everything in hass.data

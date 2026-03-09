@@ -174,11 +174,11 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._flow_data[CONF_PLEX_TOKEN] = plex_token
                 self._flow_data[CONF_PLEX_ENABLED] = True
 
-                plex_base_input = user_input.get(CONF_PLEX_BASEURL, "").strip()
+                plex_base_input = user_input.get(CONF_PLEX_BASEURL, "").strip().rstrip("/")
                 if plex_base_input:
                     self._flow_data[CONF_PLEX_BASEURL] = plex_base_input
                 else:
-                    self._flow_data[CONF_PLEX_BASEURL] = self._plex_base_from_tautulli
+                    self._flow_data[CONF_PLEX_BASEURL] = self._plex_base_from_tautulli.rstrip("/")
 
                 return self._create_tautulli_entry()
 
@@ -334,7 +334,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
                 # Store plex_token in data only (encrypted), not in options
                 self._plex_token_new = plex_token
                 plex_base = user_input.get(CONF_PLEX_BASEURL, "").strip()
-                self._plex_base_new = plex_base
+                self._plex_base_new = plex_base.rstrip("/")
                 self.options[CONF_PLEX_ENABLED] = True
                 
                 # Sync to config entry data before creating entry
@@ -390,5 +390,4 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         self.hass.config_entries.async_update_entry(
             config_entry,
             data=new_data,
-            options=self.options
         )

@@ -19,8 +19,7 @@ A custom integration for Home Assistant that allows you to monitor active Plex s
 
 ##  Active Streams
 
-- Dynamically creates session sensors based on active Plex streams.
-- Custom Sensor Count – Choose how many active streams to display.
+- Dynamically creates and removes session sensors based on active Plex streams.
 - Adjustable Scan Interval – Set how often HA updates stream data.
 - Detailed Session Attributes – Each active stream sensor provides:
     * :film_strip: **Media Title & Type** (Movie, TV Show, etc.)
@@ -52,13 +51,13 @@ If you enable **Plex Integration** and supply your **Plex Token** in the integra
 
 ##  Statistics
 
-- Seperate Scan Interval  – Set how often HA updates Statistics data.
+- Separate Scan Interval  – Set how often HA updates Statistics data.
 - Fetch Range - Choose how far data should be fetched from default 30 days ago. 
 - Detailed User Attributes – Each user sensor provides:
     * **Total Play Duration**
-    * **Tatal Completion Rate**
+    * **Total Completion Rate**
     * **Longest Play**
-    * **Prefered Watch Time**
+    * **Preferred Watch Time**
     * **Transcode Percentage**
     * **Geo Location Data**
       * And so much more!
@@ -151,7 +150,7 @@ These new features are designed to work seamlessly with automations and will bec
 * **Setup in Home Assistant:**
   * Go to **Settings → Devices & Services** and **Add** the integration.
   * Enter your **Tautulli details (URL, API Key)**, 
-  * Set the Session Sensor Count and Refresh Interval.
+  * Set the Refresh Interval.
 
   * (Optional) Enable:
     - Image Proxy Service

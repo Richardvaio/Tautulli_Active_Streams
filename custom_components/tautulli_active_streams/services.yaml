@@ -8,6 +8,8 @@ kill_all_streams:
       example: "Stream ended by admin."
       default: "Stream ended by admin."
       required: false
+      selector:
+        text:
 
 kill_user_streams:
   name: Kill User Streams
@@ -18,13 +20,17 @@ kill_user_streams:
       description: The username whose streams should be terminated.
       example: "john_smith"
       required: true
+      selector:
+        text:
     message:
       name: Message
       description: The message to send when terminating streams.
       example: "Stream ended by admin."
       default: "Stream ended by admin."
       required: false
-      
+      selector:
+        text:
+
 kill_session_stream:
   name: Kill Session Stream
   description: Terminate a specific stream using its session_id.
@@ -34,9 +40,13 @@ kill_session_stream:
       description: The session ID of the stream to terminate.
       example: "12345"
       required: true
+      selector:
+        text:
     message:
       name: Message
       description: The message to send when terminating the stream.
       example: "Stream ended by admin."
       default: "Stream ended by admin."
       required: false
+      selector:
+        text:
