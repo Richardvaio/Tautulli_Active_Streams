@@ -24,6 +24,9 @@ from .const import (
     CONF_ADVANCED_ATTRIBUTES,
     CONF_IMAGE_PROXY,
     CONF_ENABLE_IP_GEOLOCATION,
+    CONF_GEO_PROVIDER,
+    GEO_PROVIDER_TAUTULLI,
+    GEO_PROVIDER_IP_API,
     # Plex constants
     CONF_PLEX_ENABLED,
     CONF_PLEX_TOKEN,
@@ -111,6 +114,7 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             num_sensors = user_input.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
             image_proxy = user_input.get(CONF_IMAGE_PROXY, False)
             geo = user_input.get(CONF_ENABLE_IP_GEOLOCATION, False)
+            geo_provider = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
             adv_attrs = user_input.get(CONF_ADVANCED_ATTRIBUTES, False)
             enable_stats = user_input.get(CONF_ENABLE_STATISTICS, False)
             stats_mtd = user_input.get(CONF_STATS_MONTH_TO_DATE, False)
@@ -124,6 +128,7 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_NUM_SENSORS: num_sensors,
                 CONF_IMAGE_PROXY: image_proxy,
                 CONF_ENABLE_IP_GEOLOCATION: geo,
+                CONF_GEO_PROVIDER: geo_provider,
                 CONF_ADVANCED_ATTRIBUTES: adv_attrs,
                 CONF_ENABLE_STATISTICS: enable_stats,
                 CONF_STATS_MONTH_TO_DATE: stats_mtd,
@@ -144,6 +149,9 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_NUM_SENSORS, default=DEFAULT_NUM_SENSORS): vol.All(int, vol.Range(min=1)),
             vol.Optional(CONF_IMAGE_PROXY, default=False): bool,
             vol.Optional(CONF_ENABLE_IP_GEOLOCATION, default=False): bool,
+            vol.Optional(CONF_GEO_PROVIDER, default=GEO_PROVIDER_TAUTULLI): vol.In(
+                [GEO_PROVIDER_TAUTULLI, GEO_PROVIDER_IP_API]
+            ),
             vol.Optional("enable_plex_integration", default=False): bool,
             vol.Optional(CONF_ADVANCED_ATTRIBUTES, default=False): bool,
             vol.Optional(CONF_ENABLE_STATISTICS, default=False): bool,
@@ -214,6 +222,7 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_NUM_SENSORS: self._flow_data[CONF_NUM_SENSORS],
             CONF_IMAGE_PROXY: self._flow_data[CONF_IMAGE_PROXY],
             CONF_ENABLE_IP_GEOLOCATION: self._flow_data[CONF_ENABLE_IP_GEOLOCATION],
+            CONF_GEO_PROVIDER: self._flow_data.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI),
             CONF_ADVANCED_ATTRIBUTES: self._flow_data[CONF_ADVANCED_ATTRIBUTES],
             CONF_ENABLE_STATISTICS: self._flow_data[CONF_ENABLE_STATISTICS],
             CONF_STATS_MONTH_TO_DATE: self._flow_data[CONF_STATS_MONTH_TO_DATE],
@@ -255,6 +264,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             self.options[CONF_NUM_SENSORS] = user_input[CONF_NUM_SENSORS]
             self.options[CONF_IMAGE_PROXY] = user_input[CONF_IMAGE_PROXY]
             self.options[CONF_ENABLE_IP_GEOLOCATION] = user_input[CONF_ENABLE_IP_GEOLOCATION]
+            self.options[CONF_GEO_PROVIDER] = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
             self.options[CONF_ADVANCED_ATTRIBUTES] = user_input[CONF_ADVANCED_ATTRIBUTES]
             self.options[CONF_ENABLE_STATISTICS] = user_input[CONF_ENABLE_STATISTICS]
             self.options[CONF_STATS_MONTH_TO_DATE] = user_input[CONF_STATS_MONTH_TO_DATE]
@@ -288,6 +298,9 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Optional(
                 CONF_ENABLE_IP_GEOLOCATION, default=self.options.get(CONF_ENABLE_IP_GEOLOCATION, False)
             ): bool,
+            vol.Optional(
+                CONF_GEO_PROVIDER, default=self.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
+            ): vol.In([GEO_PROVIDER_TAUTULLI, GEO_PROVIDER_IP_API]),
 
             vol.Optional(
                 CONF_PLEX_ENABLED, default=self.options.get(CONF_PLEX_ENABLED, False)

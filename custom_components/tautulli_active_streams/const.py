@@ -22,6 +22,10 @@ CONF_STATISTICS_DAYS = "statistics_days"
 CONF_ADVANCED_ATTRIBUTES = "advanced_attributes"
 CONF_IMAGE_PROXY = "image_proxy"
 CONF_ENABLE_IP_GEOLOCATION = "enable_ip_geolocation"
+CONF_GEO_PROVIDER = "geo_provider"
+
+GEO_PROVIDER_TAUTULLI = "tautulli"
+GEO_PROVIDER_IP_API = "ip-api"
 
 # ---------------------------
 # Plex configuration keys
@@ -40,3 +44,13 @@ def format_seconds_to_min_sec(total_seconds: float) -> str:
 
 
 LOGGER = logging.getLogger(__package__)
+
+
+def is_private_ip(ip: str) -> bool:
+    """Return True if the IP address is private/reserved (not publicly routable)."""
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+    except ValueError:
+        return True  # If it can't be parsed, skip the lookup

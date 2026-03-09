@@ -25,6 +25,10 @@ from .const import (
     CONF_STATISTICS_DAYS,
     CONF_STATS_MONTH_TO_DATE,
     CONF_ENABLE_IP_GEOLOCATION,
+    CONF_GEO_PROVIDER,
+    GEO_PROVIDER_TAUTULLI,
+    GEO_PROVIDER_IP_API,
+    is_private_ip,
     format_seconds_to_min_sec,
     LOGGER as _LOGGER,
 )
@@ -120,7 +124,7 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
         if self.config_entry.options.get(CONF_ENABLE_IP_GEOLOCATION, False):
             for s in sessions:
                 ip = s.get("ip_address_public") or s.get("ip_address")
-                if ip:
+                if ip and not is_private_ip(ip):
                     # call the geo cache
                     geo_data = await self._geo_cache.lookup_ip(self.hass, ip)
                     s["geo_city"] = geo_data.get("city", "Unknown")
@@ -507,10 +511,10 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
     
         for username, stats in all_user_stats.items():
             ip = stats.get("last_ip")
-            if not ip:
+            if not ip or is_private_ip(ip):
                 continue
     
-            # 1) Tautulli geo lookup
+            # 1) Geo lookup (provider chosen in config)
             geodata = await self._geo_cache.lookup_ip(self.hass, ip)
             if not geodata:
                 continue
@@ -575,12 +579,32 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
 
 
             
-# --------------- IPGeoCache Example --------------- #
+# --------------- IPGeoCache --------------- #
 class IPGeoCache:
-    """Simple cache that calls Tautulli's get_geoip_lookup once per IP per hour."""
-    def __init__(self, api: TautulliAPI):
-        self._api = api  # store reference to TautulliAPI
-        self._cache = {}  # {ip: (geo_data_dict, expiry_time)}
+    """
+    Cache that resolves IPs to geolocation data.
+    Supports two providers:
+      - 'tautulli': Uses Tautulli's built-in get_geoip_lookup (MaxMind GeoLite2)
+      - 'ip-api':   Uses ip-api.com (free, no key, typically more accurate)
+    Results are cached for 1 hour per IP.
+    """
+
+    def __init__(self, api: TautulliAPI, provider: str = GEO_PROVIDER_TAUTULLI):
+        self._api = api
+        self._provider = provider
+        self._cache: dict[str, tuple[dict, float]] = {}
+
+    @property
+    def provider(self) -> str:
+        """Return the current geo provider name."""
+        return self._provider
+
+    @provider.setter
+    def provider(self, value: str) -> None:
+        """Update the provider. Clears cache when provider changes."""
+        if value != self._provider:
+            self._cache.clear()
+            self._provider = value
 
     async def lookup_ip(self, hass: HomeAssistant, ip: str) -> dict:
         now = time.time()
@@ -590,11 +614,55 @@ class IPGeoCache:
             if now < expiry:
                 return geo_data  # still valid in cache
 
-        # Not in cache or expired => fetch from Tautulli
-        geo_data = await self._api.get_geoip_lookup(ip)
+        # Not in cache or expired => fetch
+        if self._provider == GEO_PROVIDER_IP_API:
+            geo_data = await self._lookup_ip_api(hass, ip)
+        else:
+            geo_data = await self._api.get_geoip_lookup(ip)
+
         self._cache[ip] = (geo_data, now + 3600)  # 1h
         return geo_data
-# --------------------------------------------------- #
+
+    async def _lookup_ip_api(self, hass: HomeAssistant, ip: str) -> dict:
+        """
+        Query ip-api.com and normalise the response to match Tautulli's
+        get_geoip_lookup field names so downstream code works unchanged.
+        Free tier: 45 req/min, no API key required.
+        """
+        import aiohttp
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+        session = async_get_clientsession(hass)
+        url = f"http://ip-api.com/json/{ip}?fields=status,message,continent,country,countryCode,region,regionName,city,zip,lat,lon,timezone,isp,query"
+        try:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:
+                    _LOGGER.warning("ip-api.com returned HTTP %s for %s", resp.status, ip)
+                    return {}
+                data = await resp.json()
+        except Exception as err:
+            _LOGGER.warning("ip-api.com lookup failed for %s: %s", ip, err)
+            return {}
+
+        if data.get("status") != "success":
+            _LOGGER.debug("ip-api.com returned non-success for %s: %s", ip, data.get("message"))
+            return {}
+
+        # Map ip-api.com fields → Tautulli-compatible field names
+        return {
+            "city": data.get("city"),
+            "code": data.get("countryCode"),
+            "continent": data.get("continent"),
+            "country": data.get("country"),
+            "latitude": data.get("lat"),
+            "longitude": data.get("lon"),
+            "postal_code": data.get("zip"),
+            "region": data.get("regionName"),
+            "timezone": data.get("timezone"),
+            "accuracy": None,  # ip-api.com doesn't provide an accuracy radius
+            "isp": data.get("isp"),
+        }
+# ------------------------------------------- #
 
 
 
@@ -618,7 +686,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     api = TautulliAPI(url, api_key, session, verify_ssl)
     
     # Create the IPGeoCache (shared) so we can pass it to both coordinators
-    geo_cache = IPGeoCache(api)
+    geo_provider = entry.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
+    geo_cache = IPGeoCache(api, provider=geo_provider)
     
     # 2) Build your session + history coordinators
     session_interval = entry.options.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
@@ -656,7 +725,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         "sessions_coordinator": sessions_coordinator,
-        "history_coordinator": history_coordinator
+        "history_coordinator": history_coordinator,
+        "geo_cache": geo_cache,
     }
 
     # 5) Register your image view (only once across multiple entries)
@@ -792,6 +862,12 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
         history_coordinator.update_interval = timedelta(seconds=new_stats_int)
 
         sessions_coordinator.sensor_count = new_sensors
+
+        # Update geo provider if changed (clears cache automatically)
+        geo_cache = data.get("geo_cache")
+        if geo_cache:
+            new_provider = entry.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
+            geo_cache.provider = new_provider
         
         # Remove any user sensors for users who might have disappeared
         await async_remove_all_user_stats_sensors(hass, entry)
