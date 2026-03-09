@@ -95,7 +95,7 @@ data:
 Call the service for a specific user:
 
 ```yaml
-service: tautulli_active_streams.kill_user_stream
+service: tautulli_active_streams.kill_user_streams
 data:
   user: "john_doe"
   message: "Your Message Here."
