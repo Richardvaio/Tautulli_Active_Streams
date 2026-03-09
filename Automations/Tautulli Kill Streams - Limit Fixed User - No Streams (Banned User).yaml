@@ -61,7 +61,7 @@ condition:
 #   Invokes 'kill_user_stream' to forcibly end all streams for "john_smith".
 ##################################################################################
 action:
-  - service: tautulli_active_streams.kill_user_stream
+  - service: tautulli_active_streams.kill_user_streams
     data:
       user: "CHANGE_ME"
       message: "Stream has been stopped by Admin. Contact for Support"

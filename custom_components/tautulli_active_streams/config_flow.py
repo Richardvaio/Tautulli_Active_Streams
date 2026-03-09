@@ -13,8 +13,6 @@ from .const import (
     # Basic Tautulli constants
     CONF_SESSION_INTERVAL,
     DEFAULT_SESSION_INTERVAL,
-    CONF_NUM_SENSORS,
-    DEFAULT_NUM_SENSORS,
     CONF_ENABLE_STATISTICS,
     DEFAULT_STATISTICS_INTERVAL,
     DEFAULT_STATISTICS_DAYS,
@@ -111,7 +109,6 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """
         if user_input is not None:
             session_interval = user_input.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
-            num_sensors = user_input.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
             image_proxy = user_input.get(CONF_IMAGE_PROXY, False)
             geo = user_input.get(CONF_ENABLE_IP_GEOLOCATION, False)
             geo_provider = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
@@ -125,7 +122,6 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             self._flow_data.update({
                 CONF_SESSION_INTERVAL: session_interval,
-                CONF_NUM_SENSORS: num_sensors,
                 CONF_IMAGE_PROXY: image_proxy,
                 CONF_ENABLE_IP_GEOLOCATION: geo,
                 CONF_GEO_PROVIDER: geo_provider,
@@ -146,7 +142,6 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _show_advanced_form(self, errors=None):
         schema = vol.Schema({
             vol.Required(CONF_SESSION_INTERVAL, default=DEFAULT_SESSION_INTERVAL): vol.All(int, vol.Range(min=1)),
-            vol.Required(CONF_NUM_SENSORS, default=DEFAULT_NUM_SENSORS): vol.All(int, vol.Range(min=1)),
             vol.Optional(CONF_IMAGE_PROXY, default=False): bool,
             vol.Optional(CONF_ENABLE_IP_GEOLOCATION, default=False): bool,
             vol.Optional(CONF_GEO_PROVIDER, default=GEO_PROVIDER_TAUTULLI): vol.In(
@@ -219,7 +214,6 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         options = {
             CONF_SESSION_INTERVAL: self._flow_data[CONF_SESSION_INTERVAL],
-            CONF_NUM_SENSORS: self._flow_data[CONF_NUM_SENSORS],
             CONF_IMAGE_PROXY: self._flow_data[CONF_IMAGE_PROXY],
             CONF_ENABLE_IP_GEOLOCATION: self._flow_data[CONF_ENABLE_IP_GEOLOCATION],
             CONF_GEO_PROVIDER: self._flow_data.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI),
@@ -261,7 +255,6 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         """Show toggles. If plex toggled from off => on, go to plex_setup."""
         if user_input is not None:
             self.options[CONF_SESSION_INTERVAL] = user_input[CONF_SESSION_INTERVAL]
-            self.options[CONF_NUM_SENSORS] = user_input[CONF_NUM_SENSORS]
             self.options[CONF_IMAGE_PROXY] = user_input[CONF_IMAGE_PROXY]
             self.options[CONF_ENABLE_IP_GEOLOCATION] = user_input[CONF_ENABLE_IP_GEOLOCATION]
             self.options[CONF_GEO_PROVIDER] = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
@@ -274,11 +267,11 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             plex_enabled_new = user_input.get(CONF_PLEX_ENABLED, False)
             self.options[CONF_PLEX_ENABLED] = plex_enabled_new
 
-            # If user toggled plex from off => on
-            if not self._plex_enabled_old and plex_enabled_new:
+            # Only go to plex_setup when toggling Plex from off → on
+            if plex_enabled_new and not self._plex_enabled_old:
                 return await self.async_step_plex_setup()
 
-            # else finalize
+            # Plex already on (no change) or disabled — finalize
             self._update_config_entry_data()
             return self.async_create_entry(title="", data=self.options)
 
@@ -286,10 +279,6 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             vol.Required(
                 CONF_SESSION_INTERVAL,
                 default=self.options.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
-            ): vol.All(int, vol.Range(min=1)),
-            vol.Required(
-                CONF_NUM_SENSORS,
-                default=self.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
             ): vol.All(int, vol.Range(min=1)),
 
             vol.Optional(
@@ -325,7 +314,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(step_id="init", data_schema=data_schema)
 
     async def async_step_plex_setup(self, user_input=None):
-        """If user toggles plex on, gather plex token/base. Then sync to data."""
+        """Gather or update plex token/base. Then sync to data."""
         errors = {}
         if user_input is not None:
             plex_token = user_input.get(CONF_PLEX_TOKEN, "").strip()
@@ -346,8 +335,15 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
                 self._update_config_entry_data()
                 return self.async_create_entry(title="", data=self.options)
 
-        fallback_token = self.options.get(CONF_PLEX_TOKEN, "")
-        fallback_baseurl = self.options.get(CONF_PLEX_BASEURL, "")
+        fallback_token = ""
+        fallback_baseurl = ""
+
+        # Pre-fill with existing values when Plex is already configured
+        config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
+        if config_entry:
+            fallback_token = config_entry.data.get(CONF_PLEX_TOKEN, "")
+            fallback_baseurl = config_entry.data.get(CONF_PLEX_BASEURL, "")
+
         plex_schema = vol.Schema({
             vol.Required(CONF_PLEX_TOKEN, default=fallback_token): str,
             vol.Optional(CONF_PLEX_BASEURL, default=fallback_baseurl): str,        })
@@ -371,13 +367,19 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             
         new_data = dict(config_entry.data)
 
-        # Update Plex fields in data
-        new_data[CONF_PLEX_ENABLED] = self.options.get(CONF_PLEX_ENABLED, False)
-        new_data[CONF_PLEX_BASEURL] = getattr(self, "_plex_base_new", new_data.get(CONF_PLEX_BASEURL, ""))
+        plex_enabled = self.options.get(CONF_PLEX_ENABLED, False)
+        new_data[CONF_PLEX_ENABLED] = plex_enabled
 
-        # Only update plex_token if a new one was provided
-        if hasattr(self, "_plex_token_new"):
-            new_data[CONF_PLEX_TOKEN] = self._plex_token_new
+        if plex_enabled:
+            # Update base URL (use new value if provided, else keep existing)
+            new_data[CONF_PLEX_BASEURL] = getattr(self, "_plex_base_new", new_data.get(CONF_PLEX_BASEURL, ""))
+            # Only update plex_token if a new one was provided
+            if hasattr(self, "_plex_token_new"):
+                new_data[CONF_PLEX_TOKEN] = self._plex_token_new
+        else:
+            # Plex disabled — clear credentials from stored data
+            new_data[CONF_PLEX_TOKEN] = ""
+            new_data[CONF_PLEX_BASEURL] = ""
 
         self.hass.config_entries.async_update_entry(
             config_entry,

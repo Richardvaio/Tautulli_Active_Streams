@@ -10,6 +10,7 @@ from .const import DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 # Only allow Plex-style image paths (e.g. /library/metadata/12345/thumb/6789)
+# Rejects path traversal (..) and other non-Plex patterns
 _VALID_IMG_PATTERN = re.compile(r"^/[\w/.-]+$")
 
 
@@ -39,6 +40,10 @@ class TautulliImageView(HomeAssistantView):
 
         # Sanitize img parameter — must look like a Plex media path
         if not _VALID_IMG_PATTERN.match(img):
+            return web.Response(status=400, text="Invalid img parameter")
+
+        # Reject path traversal attempts
+        if ".." in img:
             return web.Response(status=400, text="Invalid img parameter")
 
         # Look up the stored data for this entry_id

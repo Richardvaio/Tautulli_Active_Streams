@@ -1,4 +1,5 @@
 import logging
+import ipaddress
 
 DOMAIN = "tautulli_active_streams"
 
@@ -36,10 +37,13 @@ CONF_PLEX_BASEURL = "plex_base_url"
 
 
 def format_seconds_to_min_sec(total_seconds: float) -> str:
-    """Convert seconds into 'Mm Ss' format."""
+    """Convert seconds into human-readable duration."""
     total_seconds = int(total_seconds)
-    minutes = total_seconds // 60
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
     secs = total_seconds % 60
+    if hours > 0:
+        return f"{hours}h {minutes}m {secs}s"
     return f"{minutes}m {secs}s"
 
 
@@ -48,7 +52,6 @@ LOGGER = logging.getLogger(__package__)
 
 def is_private_ip(ip: str) -> bool:
     """Return True if the IP address is private/reserved (not publicly routable)."""
-    import ipaddress
     try:
         addr = ipaddress.ip_address(ip)
         return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved

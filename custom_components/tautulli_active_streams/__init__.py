@@ -15,12 +15,10 @@ from .views import TautulliImageView
 from .const import (
     DOMAIN,
     DEFAULT_SESSION_INTERVAL,
-    DEFAULT_NUM_SENSORS,
     DEFAULT_STATISTICS_INTERVAL,
     DEFAULT_STATISTICS_DAYS,
     CONF_ENABLE_STATISTICS,
     CONF_SESSION_INTERVAL,
-    CONF_NUM_SENSORS,
     CONF_STATISTICS_INTERVAL,
     CONF_STATISTICS_DAYS,
     CONF_STATS_MONTH_TO_DATE,
@@ -62,9 +60,6 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator):
 
         self.start_times = {}
         self.paused_since = {}
-
-        # For controlling how many session sensors we want
-        self.sensor_count = config_entry.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
         
     async def _async_update_data(self):
         """Fetch from Tautulli get_activity, track paused durations, etc."""
@@ -548,7 +543,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             last_stopped_ts = stats.get("last_stopped_ts")
             last_watched_str = None
             if last_stopped_ts:
-                dt_obj = datetime.fromtimestamp(last_stopped_ts)
+                dt_obj = datetime.fromtimestamp(last_stopped_ts, tz=ha_now().tzinfo)
                 raw_str = dt_obj.strftime("%I:%M%p %d-%m-%Y")  # "02:38PM 12-03-2025"
                 last_watched_str = raw_str.lstrip("0")         # "2:38PM 12-03-2025"
     
@@ -753,41 +748,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 # ---------------------------
-#  Removing Sensors
-# ---------------------------
-async def async_remove_extra_session_sensors(hass: HomeAssistant, entry: ConfigEntry):
-    """Remove session sensors above the new count."""
-    from homeassistant.helpers import entity_registry as er
-    registry = er.async_get(hass)
-
-    new_count = entry.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
-    _LOGGER.debug("Removing session sensors above new count: %s", new_count)
-
-    entries = er.async_entries_for_config_entry(registry, entry.entry_id)
-    for ent in entries:
-        if (
-            ent.domain == "sensor"
-            and ent.unique_id.startswith("plex_session_")
-            and ent.unique_id.endswith("_tautulli")
-        ):
-            # unique_id e.g. "plex_session_3_<entryid>_tautulli"
-            middle = ent.unique_id[len("plex_session_") : -len("_tautulli")]
-            parts = middle.split("_", 1)
-            if not parts:
-                continue
-            sensor_number_str = parts[0]
-            try:
-                sensor_number = int(sensor_number_str)
-            except ValueError:
-                _LOGGER.debug("Could not parse sensor # from %s", ent.unique_id)
-                continue
-
-            if sensor_number > new_count:
-                _LOGGER.debug("Removing sensor entity: %s (index %s)", ent.entity_id, sensor_number)
-                registry.async_remove(ent.entity_id)
-
-
-# ---------------------------
 #  Update Options
 # ---------------------------
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
@@ -817,10 +777,6 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     new_mtd = entry.options.get(CONF_STATS_MONTH_TO_DATE, False)
     history_coordinator.old_mtd = new_mtd
 
-    # Sensor counts
-    old_sensors = sessions_coordinator.sensor_count
-    new_sensors = entry.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
-
     reload_needed = False
 
     if old_stats != new_stats:
@@ -834,23 +790,15 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
     if old_mtd != new_mtd:
         _LOGGER.debug("Month-to-date toggled from %s to %s; reload needed", old_mtd, new_mtd)
         reload_needed = True
-
-    if old_sensors != new_sensors:
-        _LOGGER.debug("Sensor count changed from %s to %s; reload needed", old_sensors, new_sensors)
-        reload_needed = True
         
     # If major changes, do a reload.
     if reload_needed:
-        # 1) If they lowered sensors, remove extras first
-        if new_sensors < old_sensors:
-            await async_remove_extra_session_sensors(hass, entry)
-
-        # 2) If they turned stats off, remove stats sensors & device and the watch-history button
+        # If they turned stats off, remove stats sensors & device and the watch-history button
         if old_stats and not new_stats:
             await async_remove_statistics_sensors(hass, entry)
             await async_remove_history_button(hass, entry)
 
-        # 3) Reload so sensor/button code picks up changes or re-adds user sensors
+        # Reload so sensor/button code picks up changes or re-adds user sensors
         await hass.config_entries.async_reload(entry.entry_id)
 
 
@@ -861,16 +809,11 @@ async def async_update_options(hass: HomeAssistant, entry: ConfigEntry):
         sessions_coordinator.update_interval = timedelta(seconds=new_session_int)
         history_coordinator.update_interval = timedelta(seconds=new_stats_int)
 
-        sessions_coordinator.sensor_count = new_sensors
-
         # Update geo provider if changed (clears cache automatically)
         geo_cache = data.get("geo_cache")
         if geo_cache:
             new_provider = entry.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
             geo_cache.provider = new_provider
-        
-        # Remove any user sensors for users who might have disappeared
-        await async_remove_all_user_stats_sensors(hass, entry)
         
         await sessions_coordinator.async_request_refresh()
         await history_coordinator.async_request_refresh()
@@ -883,8 +826,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        # Remove from hass.data
-        hass.data[DOMAIN].pop(entry.entry_id, None)
+        data = hass.data[DOMAIN].pop(entry.entry_id, {})
+
+        # Unsubscribe dynamic stats listeners
+        for unsub in data.get("stats_unsub_listeners", []):
+            unsub()
+
+        # Unsubscribe dynamic session listeners
+        for unsub in data.get("session_unsub_listeners", []):
+            unsub()
         
         # Only remove the kill services if this is the *last* config entry for this domain
         remaining_entries = [

@@ -16,7 +16,6 @@
         "description": "Configure how often to poll Tautulli, how many sensors to create, and whether to enable watch-history statistics. You can also enable Plex integration here.",
         "data": {
           "session_interval": "How often (in seconds) to refresh active streams?",
-          "num_sensors": "Number of sensors to create for monitoring active streams.",
           "image_proxy": "Use Image Proxy? (Proxy images via Home Assistant).",
           "enable_ip_geolocation": "Enable IP Geolocation? (Use IP-to-location mapping from Tautulli).",
           "geo_provider": "GeoIP Provider (tautulli = MaxMind GeoLite2, ip-api = ip-api.com — typically more accurate).",
@@ -52,7 +51,6 @@
         "description": "Advanced settings. Changes apply seamlessly without a Home Assistant restart.",
         "data": {
           "session_interval": "API update frequency for active streams (seconds).",
-          "num_sensors": "Maximum number of concurrent stream sensors to display.",
           "image_proxy": "Use Image Proxy? (Proxy images via Home Assistant).",
           "enable_ip_geolocation": "Enable IP Geolocation?",
           "geo_provider": "GeoIP Provider (tautulli = MaxMind GeoLite2, ip-api = ip-api.com — typically more accurate).",

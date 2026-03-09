@@ -12,7 +12,7 @@
 # 2) Update 'pause_limit_minutes' to your desired threshold (e.g. 10 -> kills sessions
 #    paused longer than 10 minutes).
 # 3) Ensure 'sensor.tautulli_stream_count' is the correct name of your aggregator sensor
-#    that contains the 'sessions' attribute, including "Stream_paused_duration_sec".
+#    that contains the 'sessions' attribute, including "stream_paused_duration_sec".
 # 4) Reload or restart your automations in Home Assistant, or click "Reload Automations"
 #    from Developer Tools → YAML in the UI.
 #
@@ -73,7 +73,7 @@ action:
         - variables:
             this_session: "{{ repeat.item }}"
             sid: "{{ this_session.session_id | default('unknown') }}"
-            paused_sec: "{{ this_session.Stream_paused_duration_sec | float(0) }}"
+            paused_sec: "{{ this_session.stream_paused_duration_sec | float(0) }}"
             state: "{{ this_session.state | lower | default('unknown') }}"
 
         ####################################################################

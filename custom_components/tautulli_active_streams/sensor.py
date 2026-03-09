@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from homeassistant.config_entries import ConfigEntry
@@ -18,8 +19,6 @@ import xml.etree.ElementTree as ET
 
 from .const import (
     DOMAIN,
-    DEFAULT_NUM_SENSORS,
-    CONF_NUM_SENSORS,
     CONF_ENABLE_STATISTICS,
     CONF_ADVANCED_ATTRIBUTES,
     CONF_ENABLE_IP_GEOLOCATION,
@@ -180,15 +179,47 @@ async def async_setup_entry(hass, entry, async_add_entities):
     sessions_coordinator = data["sessions_coordinator"]
     history_coordinator = data["history_coordinator"]
 
-    # Number of active stream sensors to create
-    num_sensors = entry.options.get(CONF_NUM_SENSORS, DEFAULT_NUM_SENSORS)
+    # 1) Create one guaranteed session sensor (Plex Session 1)
+    session_sensors = [TautulliStreamSensor(sessions_coordinator, entry, 0)]
 
-    # 1) Create a sensor for each "active stream" slot
-    session_sensors = []
-    for i in range(num_sensors):
-        session_sensors.append(
-            TautulliStreamSensor(sessions_coordinator, entry, i)
-        )
+    # Track current sensor count for dynamic add/remove
+    current_sensor_count = [1]  # use list to allow mutation in closure
+
+    def _sync_session_sensors() -> None:
+        """Coordinator listener: add or remove sensors to match active stream count."""
+        if not sessions_coordinator.data:
+            return
+        active_count = len(sessions_coordinator.data.get("sessions", []))
+        # Always keep at least 1 sensor
+        target = max(1, active_count)
+
+        if target > current_sensor_count[0]:
+            # Add sensors for new streams
+            new_sensors = []
+            for i in range(current_sensor_count[0], target):
+                new_sensors.append(
+                    TautulliStreamSensor(sessions_coordinator, entry, i)
+                )
+            current_sensor_count[0] = target
+            async_add_entities(new_sensors, True)
+            _LOGGER.debug(
+                "Dynamically added %d session sensor(s) (total: %d)",
+                len(new_sensors),
+                current_sensor_count[0],
+            )
+        elif target < current_sensor_count[0]:
+            # Remove sensors that no longer have an active stream
+            registry = er.async_get(hass)
+            for i in range(target, current_sensor_count[0]):
+                uid = f"plex_session_{i + 1}_{entry.entry_id}_tautulli"
+                entity_id = registry.async_get_entity_id("sensor", DOMAIN, uid)
+                if entity_id:
+                    registry.async_remove(entity_id)
+                    _LOGGER.debug("Removed session sensor: %s", entity_id)
+            current_sensor_count[0] = target
+
+    unsub = sessions_coordinator.async_add_listener(_sync_session_sensors)
+    data.setdefault("session_unsub_listeners", []).append(unsub)
 
     # 2) Create diagnostic sensors
     diagnostic_sensors = [
@@ -204,9 +235,25 @@ async def async_setup_entry(hass, entry, async_add_entities):
     # 3) (Optional) Create user stats sensors if "enable_statistics" is on
     stats_sensors = []
     if entry.options.get(CONF_ENABLE_STATISTICS, False):
+        # --- Migration: remove old index-based unique_ids ---
+        registry = er.async_get(hass)
+        old_id_pattern = re.compile(
+            rf"^{re.escape(entry.entry_id)}_.*_\d+_stats_$"
+        )
+        for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if old_id_pattern.match(ent.unique_id):
+                _LOGGER.debug(
+                    "Migrating old index-based stats entity: %s (unique_id: %s)",
+                    ent.entity_id,
+                    ent.unique_id,
+                )
+                registry.async_remove(ent.entity_id)
+
+        # Track which users already have sensors so the listener can add new ones
+        tracked_users: set[str] = set()
+
         user_stats = history_coordinator.data.get("user_stats", {})
         if user_stats:
-            i = 0
             for username, stats_dict in user_stats.items():
                 stats_sensors.append(
                     TautulliUserStatsSensor(
@@ -214,14 +261,44 @@ async def async_setup_entry(hass, entry, async_add_entities):
                         entry=entry,
                         username=username,
                         stats=stats_dict,
-                        index=i
                     )
                 )
-                i += 1
+                tracked_users.add(username)
         else:
             _LOGGER.debug(
                 "enable_statistics is True, but no user_stats found in history_coordinator.data."
             )
+
+        # --- Dynamic discovery: add sensors for users that appear later ---
+        def _check_new_users() -> None:
+            """Coordinator listener that creates sensors for newly discovered users."""
+            if not history_coordinator.data:
+                return
+            current_users = set(
+                history_coordinator.data.get("user_stats", {}).keys()
+            )
+            new_users = current_users - tracked_users
+            if not new_users:
+                return
+            new_sensors = []
+            for username in new_users:
+                new_sensors.append(
+                    TautulliUserStatsSensor(
+                        coordinator=history_coordinator,
+                        entry=entry,
+                        username=username,
+                        stats=history_coordinator.data["user_stats"][username],
+                    )
+                )
+                tracked_users.add(username)
+            async_add_entities(new_sensors, True)
+            _LOGGER.debug(
+                "Dynamically added stats sensors for new users: %s", new_users
+            )
+
+        # Store unsub so it can be cleaned up on unload
+        unsub = history_coordinator.async_add_listener(_check_new_users)
+        data.setdefault("stats_unsub_listeners", []).append(unsub)
 
     # Add everything to Home Assistant
     async_add_entities(session_sensors, True)
@@ -895,15 +972,14 @@ class TautulliUserStatsSensor(CoordinatorEntity, SensorEntity):
     referencing history_coordinator.data for user_stats.
     """
 
-    def __init__(self, coordinator, entry: ConfigEntry, username: str, stats: dict, index: int):
+    def __init__(self, coordinator, entry: ConfigEntry, username: str, stats: dict):
         super().__init__(coordinator)
         self._entry = entry
         self._username = username
         self._stats = stats
-        self._index = index
 
         # Must have "_stats_" so the removal code can detect it
-        self._attr_unique_id = f"{entry.entry_id}_{username.lower()}_{index}_stats_"
+        self._attr_unique_id = f"{entry.entry_id}_{username.lower()}_stats_"
         self._attr_name = f"{username} Stats"
 
         # Put these sensors under a separate device named "<Integration Title> Statistics"
