@@ -39,6 +39,11 @@ class TautulliAPI:
         """Return the aiohttp session."""
         return self._session
 
+    @property
+    def _safe_base_url(self) -> str:
+        """Return the base URL without the API key for safe logging."""
+        return f"{self._base_url}?apikey=[REDACTED]&cmd="
+
     async def _call_tautulli(self, cmd, params=None, method="GET"):
         """
         Generic helper to call any Tautulli API command.
@@ -50,8 +55,8 @@ class TautulliAPI:
         method = method.upper()
 
         _LOGGER.debug(
-            "TautulliAPI: calling cmd=%s method=%s params=%s",
-            cmd, method, params
+            "TautulliAPI: calling cmd=%s method=%s",
+            cmd, method
         )
 
         try:
@@ -90,10 +95,15 @@ class TautulliAPI:
                         _LOGGER.warning("Non-200 status from Tautulli GET: %s", response.status)
                         return {}
         except asyncio.TimeoutError:
-            _LOGGER.warning("Tautulli API request to %s timed out after %s seconds.", url, self._timeout)
+            _LOGGER.warning(
+                "Tautulli API request '%s' timed out after %s seconds.",
+                cmd, self._timeout.total
+            )
             return {}
         except Exception as err:
-            _LOGGER.error("Exception calling Tautulli %s: %s", cmd, err)
+            # Sanitize the error message to avoid leaking the API key
+            err_msg = str(err).replace(self._api_key, "[REDACTED]")
+            _LOGGER.error("Exception calling Tautulli %s: %s", cmd, err_msg)
             return {}
 
     async def get_activity(self):

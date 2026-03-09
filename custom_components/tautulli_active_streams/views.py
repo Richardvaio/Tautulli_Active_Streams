@@ -92,5 +92,6 @@ class TautulliImageView(HomeAssistantView):
                 return web.Response(body=image_data, content_type="image/jpeg")
 
         except Exception as err:
-            _LOGGER.exception("Exception fetching Tautulli image: %s", err)
+            err_msg = str(err).replace(api_key, "[REDACTED]")
+            _LOGGER.error("Exception fetching Tautulli image: %s", err_msg)
             return web.Response(status=500, text="Error fetching image")
