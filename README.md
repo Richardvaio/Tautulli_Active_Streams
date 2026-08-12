@@ -62,6 +62,13 @@ If you enable **Plex Integration** and supply your **Plex Token** in the integra
     * **Geo Location Data**
       * And so much more!
 
+### IP geolocation device trackers
+
+When **IP Geolocation** and **Statistics** are enabled, the integration creates
+registry-backed device trackers for the approximate location of each user's
+most recent public streaming IP. New trackers use entity IDs such as
+`device_tracker.tautulli_active_streams_username`.
+
  
 --- 
 

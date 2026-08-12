@@ -7,7 +7,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.const import CONF_URL, CONF_API_KEY, CONF_VERIFY_SSL
+from homeassistant.const import CONF_URL, CONF_API_KEY, CONF_VERIFY_SSL, Platform
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util.dt import now as ha_now
 
@@ -34,7 +34,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "button"]
+PLATFORMS = [Platform.SENSOR, Platform.BUTTON, Platform.DEVICE_TRACKER]
 
 
 # ---------------------------
@@ -218,8 +218,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
 
         # If IP geolocation is on => geolocate user IPs
         if self.config_entry.options.get(CONF_ENABLE_IP_GEOLOCATION, False):
-            records = data["history"].get("data", []) if data["history"] else []
-            await self._do_user_ip_geolocation(data["user_stats"], records)
+            await self._do_user_ip_geolocation(data["user_stats"])
 
         return data
 
@@ -234,6 +233,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             user = item.get("user", "Unknown")
             if user not in user_stats:
                 user_stats[user] = {
+                    "user_id": item.get("user_id"),
                     "total_plays": 0,
                     "total_play_duration_sec": 0,
                     "movie_plays": 0,
@@ -278,6 +278,12 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
                 }
 
             stats = user_stats[user]
+
+            # Plex user IDs are stable when a display name changes. Keep the
+            # upstream ID with the aggregated data so config-entry entities can
+            # use it as their registry identity.
+            if stats.get("user_id") is None and item.get("user_id") is not None:
+                stats["user_id"] = item["user_id"]
 
             # read IP address if available
             ip_addr = item.get("ip_address")
@@ -514,7 +520,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
 
         return user_stats
 
-    async def _do_user_ip_geolocation(self, all_user_stats, records):
+    async def _do_user_ip_geolocation(self, all_user_stats):
         """Loop over user stats, geolocate them, etc."""
         if not all_user_stats:
             return
@@ -554,43 +560,6 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator):
             stats["geo_latitude"] = lat if lat is not None else None
             stats["geo_longitude"] = lon if lon is not None else None
     
-            # 3.5) last_watched
-            last_stopped_ts = stats.get("last_stopped_ts")
-            last_watched_str = None
-            if last_stopped_ts:
-                dt_obj = datetime.fromtimestamp(last_stopped_ts, tz=ha_now().tzinfo)
-                raw_str = dt_obj.strftime("%I:%M%p %d-%m-%Y")  # "02:38PM 12-03-2025"
-                last_watched_str = raw_str.lstrip("0")         # "2:38PM 12-03-2025"
-    
-            # 4) Also create/update your device_tracker with lat/long, city, region, etc.
-            dev_id = f"tautulli_{username.lower().replace(' ', '_').replace('.', '')}"
-    
-            attributes = {
-                "ip_address": ip,
-                "city": city,
-                "region": region,
-                "country": country,
-            }
-            if last_watched_str:
-                attributes["last_watched"] = last_watched_str
-    
-            await self.hass.services.async_call(
-                "device_tracker",
-                "see",
-                {
-                    "dev_id": dev_id,
-                    "host_name": f"{username}: Tautulli",
-                    **({
-                        "gps": (lat, lon),
-                        "source_type": "gps",
-                    } if lat is not None and lon is not None else {}),
-                    "attributes": attributes,
-                },
-                blocking=False,
-            )
-
-
-            
 # --------------- IPGeoCache --------------- #
 class IPGeoCache:
     """
