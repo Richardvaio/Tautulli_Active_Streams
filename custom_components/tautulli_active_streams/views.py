@@ -1,6 +1,6 @@
 import logging
 import re
-from urllib.parse import quote
+
 import aiohttp
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
@@ -12,6 +12,20 @@ _LOGGER = logging.getLogger(__name__)
 # Only allow Plex-style image paths (e.g. /library/metadata/12345/thumb/6789)
 # Rejects path traversal (..) and other non-Plex patterns
 _VALID_IMG_PATTERN = re.compile(r"^/[\w/.-]+$")
+_MIN_IMAGE_SIZE = 16
+_MAX_IMAGE_SIZE = 2000
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+def _image_dimension(value: str) -> int | None:
+    """Return a bounded image dimension or None when invalid."""
+    try:
+        dimension = int(value)
+    except (TypeError, ValueError):
+        return None
+    if not _MIN_IMAGE_SIZE <= dimension <= _MAX_IMAGE_SIZE:
+        return None
+    return dimension
 
 
 class TautulliImageView(HomeAssistantView):
@@ -19,7 +33,7 @@ class TautulliImageView(HomeAssistantView):
 
     url = "/api/tautulli/image"
     name = "api:tautulli:image"
-    requires_auth = False
+    requires_auth = True
 
     async def get(self, request: web.Request):
         """Proxy image requests to Tautulli's pms_image_proxy endpoint."""
@@ -27,8 +41,8 @@ class TautulliImageView(HomeAssistantView):
 
         entry_id = request.query.get("entry_id")
         img = request.query.get("img")
-        width = request.query.get("width", "300")
-        height = request.query.get("height", "450")
+        width = _image_dimension(request.query.get("width", "300"))
+        height = _image_dimension(request.query.get("height", "450"))
         fallback = request.query.get("fallback", "poster")
         refresh = request.query.get("refresh", "true")
 
@@ -37,6 +51,11 @@ class TautulliImageView(HomeAssistantView):
             return web.Response(status=400, text="Missing entry_id parameter")
         if not img:
             return web.Response(status=400, text="Missing img parameter")
+        if width is None or height is None:
+            return web.Response(
+                status=400,
+                text=f"Image dimensions must be between {_MIN_IMAGE_SIZE} and {_MAX_IMAGE_SIZE}",
+            )
 
         # Sanitize img parameter — must look like a Plex media path
         if not _VALID_IMG_PATTERN.match(img):
@@ -67,17 +86,16 @@ class TautulliImageView(HomeAssistantView):
         if not base_url or not api_key:
             return web.Response(status=500, text="Missing Tautulli base URL or API key")
 
-        # Construct the Tautulli image URL with properly encoded img path
-        tautulli_image_url = (
-            f"{base_url}/api/v2"
-            f"?apikey={api_key}"
-            f"&cmd=pms_image_proxy"
-            f"&img={quote(img, safe='/')}"
-            f"&width={quote(width)}"
-            f"&height={quote(height)}"
-            f"&fallback={quote(fallback)}"
-            f"&refresh={quote(refresh)}"
-        )
+        tautulli_image_url = f"{base_url}/api/v2"
+        params = {
+            "apikey": api_key,
+            "cmd": "pms_image_proxy",
+            "img": img,
+            "width": width,
+            "height": height,
+            "fallback": fallback,
+            "refresh": refresh,
+        }
 
         _LOGGER.debug("Forwarding Tautulli image request for entry_id=%s", entry_id)
 
@@ -85,18 +103,45 @@ class TautulliImageView(HomeAssistantView):
         try:
             async with session.get(
                 tautulli_image_url,
+                params=params,
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as response:
                 if response.status != 200:
-                    _LOGGER.error("Error fetching Tautulli image, status: %s", response.status)
+                    _LOGGER.error(
+                        "Error fetching Tautulli image, status: %s", response.status
+                    )
                     return web.Response(
                         status=response.status,
-                        text=f"Error fetching image (HTTP {response.status})"
+                        text=f"Error fetching image (HTTP {response.status})",
                     )
-                image_data = await response.read()
-                return web.Response(body=image_data, content_type="image/jpeg")
+                content_type = response.headers.get("Content-Type", "")
+                if not content_type.lower().startswith("image/"):
+                    return web.Response(
+                        status=502, text="Tautulli returned non-image content"
+                    )
+                if (
+                    response.content_length
+                    and response.content_length > _MAX_IMAGE_BYTES
+                ):
+                    return web.Response(status=502, text="Image response is too large")
 
-        except Exception as err:
+                chunks: list[bytes] = []
+                bytes_read = 0
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    bytes_read += len(chunk)
+                    if bytes_read > _MAX_IMAGE_BYTES:
+                        return web.Response(
+                            status=502, text="Image response is too large"
+                        )
+                    chunks.append(chunk)
+                image_data = b"".join(chunks)
+                return web.Response(
+                    body=image_data,
+                    content_type=content_type.split(";", 1)[0],
+                    headers={"Cache-Control": "private, max-age=300"},
+                )
+
+        except Exception as err:  # noqa: BLE001 - HTTP view error boundary
             err_msg = str(err).replace(api_key, "[REDACTED]")
             _LOGGER.error("Exception fetching Tautulli image: %s", err_msg)
             return web.Response(status=500, text="Error fetching image")

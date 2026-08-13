@@ -1,222 +1,402 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.config_entries import FlowResult
 from homeassistant.const import CONF_API_KEY, CONF_URL, CONF_VERIFY_SSL
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .api import TautulliAPI, TautulliAuthError, TautulliConnectionError
 from .const import (
-    DOMAIN,
-    # Basic Tautulli constants
-    CONF_SESSION_INTERVAL,
-    DEFAULT_SESSION_INTERVAL,
-    CONF_ENABLE_STATISTICS,
-    DEFAULT_STATISTICS_INTERVAL,
-    DEFAULT_STATISTICS_DAYS,
-    CONF_STATS_MONTH_TO_DATE,
-    CONF_STATISTICS_INTERVAL,
-    CONF_STATISTICS_DAYS,
     CONF_ADVANCED_ATTRIBUTES,
-    CONF_IMAGE_PROXY,
     CONF_ENABLE_IP_GEOLOCATION,
+    CONF_ENABLE_STATISTICS,
+    CONF_EXPOSE_DETAILED_LOCATION,
     CONF_GEO_PROVIDER,
-    GEO_PROVIDER_TAUTULLI,
-    GEO_PROVIDER_IP_API,
-    # Plex constants
+    CONF_PLEX_BASEURL,
     CONF_PLEX_ENABLED,
     CONF_PLEX_TOKEN,
-    CONF_PLEX_BASEURL,
+    CONF_PLEX_VERIFY_SSL,
+    CONF_SESSION_INTERVAL,
+    CONF_STATISTICS_DAYS,
+    CONF_STATISTICS_INTERVAL,
+    CONF_STATS_MONTH_TO_DATE,
+    DEFAULT_SESSION_INTERVAL,
+    DEFAULT_STATISTICS_DAYS,
+    DEFAULT_STATISTICS_INTERVAL,
+    DOMAIN,
+    GEO_PROVIDER_IP_API,
+    GEO_PROVIDER_TAUTULLI,
 )
-from .api import TautulliAPI, TautulliConnectionError, TautulliAuthError
+from .flow_helpers import (
+    PlexAuthError,
+    PlexConnectionError,
+    async_validate_plex as _async_validate_plex,
+    normalize_base_url as _normalize_base_url,
+    password_selector as _password_selector,
+    server_data as _server_data,
+    server_unique_id as _server_unique_id,
+)
+from .options_flow import TautulliOptionsFlowHandler
 
 _LOGGER = logging.getLogger(__name__)
+
+CONF_SERVER_NAME = "server_name"
 
 
 class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Configuration flow for Tautulli Active Streams."""
+
     VERSION = 1
 
-    def __init__(self):
-        self._flow_data = {}
+    def __init__(self) -> None:
+        self._flow_data: dict[str, Any] = {}
         self._plex_base_from_tautulli = ""
 
-    async def async_step_user(self, user_input=None):
-        """
-        Step 1: Basic Tautulli info. If valid, go to step_advanced.
-        """
-        errors = {}
-        if user_input is not None:
-            url = user_input[CONF_URL].strip()
-            if not url.startswith(("http://", "https://")):
-                url = f"http://{url}"
-            verify_ssl = user_input.get(CONF_VERIFY_SSL, True)
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Collect and validate the required Tautulli connection."""
+        errors: dict[str, str] = {}
 
-            session = async_get_clientsession(self.hass, verify_ssl)
-            api = TautulliAPI(url, user_input[CONF_API_KEY], session, verify_ssl)
+        if user_input is not None:
+            try:
+                url = _normalize_base_url(user_input[CONF_URL])
+            except ValueError:
+                errors[CONF_URL] = "invalid_url"
+            else:
+                api_key = user_input[CONF_API_KEY].strip()
+                verify_ssl = user_input.get(CONF_VERIFY_SSL, True)
+                session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
+                api = TautulliAPI(url, api_key, session, verify_ssl)
+
+                try:
+                    response = await api.get_server_info()
+                except TautulliAuthError:
+                    errors["base"] = "invalid_api_key"
+                except (TautulliConnectionError, aiohttp.ClientConnectionError):
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected Tautulli setup error")
+                    errors["base"] = "unknown"
+                else:
+                    server_data = _server_data(response)
+                    await self.async_set_unique_id(_server_unique_id(response, url))
+                    self._abort_if_unique_id_configured()
+
+                    server_name = user_input.get(CONF_SERVER_NAME, "").strip()
+                    server_name = server_name or server_data.get("pms_name", "")
+                    self._flow_data.update(
+                        {
+                            CONF_SERVER_NAME: server_name,
+                            CONF_URL: url,
+                            CONF_API_KEY: api_key,
+                            CONF_VERIFY_SSL: verify_ssl,
+                        }
+                    )
+                    self._plex_base_from_tautulli = str(
+                        server_data.get("pms_url", "")
+                    ).rstrip("/")
+                    return await self.async_step_features()
+
+        values = user_input or {}
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SERVER_NAME,
+                    default=values.get(CONF_SERVER_NAME, ""),
+                ): str,
+                vol.Required(CONF_URL, default=values.get(CONF_URL, "")): str,
+                vol.Required(CONF_API_KEY): _password_selector("new-password"),
+                vol.Optional(
+                    CONF_VERIFY_SSL,
+                    default=values.get(CONF_VERIFY_SSL, True),
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_features(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Choose the optional features to configure during setup."""
+        if user_input is not None:
+            self._flow_data.update(
+                {
+                    CONF_SESSION_INTERVAL: user_input[CONF_SESSION_INTERVAL],
+                    CONF_ADVANCED_ATTRIBUTES: user_input[CONF_ADVANCED_ATTRIBUTES],
+                    CONF_ENABLE_IP_GEOLOCATION: user_input[CONF_ENABLE_IP_GEOLOCATION],
+                    CONF_ENABLE_STATISTICS: user_input[CONF_ENABLE_STATISTICS],
+                    CONF_PLEX_ENABLED: user_input[CONF_PLEX_ENABLED],
+                    # Keep valid defaults even while optional features are disabled.
+                    CONF_GEO_PROVIDER: GEO_PROVIDER_TAUTULLI,
+                    CONF_EXPOSE_DETAILED_LOCATION: False,
+                    CONF_STATS_MONTH_TO_DATE: False,
+                    CONF_STATISTICS_DAYS: DEFAULT_STATISTICS_DAYS,
+                    CONF_STATISTICS_INTERVAL: DEFAULT_STATISTICS_INTERVAL,
+                }
+            )
+            if self._flow_data[CONF_ENABLE_IP_GEOLOCATION]:
+                return await self.async_step_location()
+            return await self._async_next_setup_step(after="location")
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_SESSION_INTERVAL,
+                    default=DEFAULT_SESSION_INTERVAL,
+                ): vol.All(int, vol.Range(min=1)),
+                vol.Optional(CONF_ADVANCED_ATTRIBUTES, default=False): bool,
+                vol.Optional(CONF_ENABLE_IP_GEOLOCATION, default=False): bool,
+                vol.Optional(CONF_ENABLE_STATISTICS, default=False): bool,
+                vol.Optional(CONF_PLEX_ENABLED, default=False): bool,
+            }
+        )
+        return self.async_show_form(step_id="features", data_schema=schema)
+
+    async def async_step_location(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Configure optional geolocation and privacy settings."""
+        if user_input is not None:
+            self._flow_data.update(user_input)
+            return await self._async_next_setup_step(after="location")
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_GEO_PROVIDER, default=GEO_PROVIDER_TAUTULLI): vol.In(
+                    [GEO_PROVIDER_TAUTULLI, GEO_PROVIDER_IP_API]
+                ),
+                vol.Optional(CONF_EXPOSE_DETAILED_LOCATION, default=False): bool,
+            }
+        )
+        return self.async_show_form(step_id="location", data_schema=schema)
+
+    async def async_step_statistics(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Configure optional watch-history statistics."""
+        if user_input is not None:
+            self._flow_data.update(user_input)
+            return await self._async_next_setup_step(after="statistics")
+
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_STATS_MONTH_TO_DATE, default=False): bool,
+                vol.Optional(
+                    CONF_STATISTICS_DAYS,
+                    default=DEFAULT_STATISTICS_DAYS,
+                ): vol.All(int, vol.Range(min=1)),
+                vol.Optional(
+                    CONF_STATISTICS_INTERVAL,
+                    default=DEFAULT_STATISTICS_INTERVAL,
+                ): vol.All(int, vol.Range(min=60)),
+            }
+        )
+        return self.async_show_form(step_id="statistics", data_schema=schema)
+
+    async def _async_next_setup_step(
+        self, after: str
+    ) -> config_entries.ConfigFlowResult:
+        """Continue through only the setup pages enabled by the user."""
+        if after == "location" and self._flow_data[CONF_ENABLE_STATISTICS]:
+            return await self.async_step_statistics()
+        if self._flow_data[CONF_PLEX_ENABLED]:
+            return await self.async_step_plex()
+        return self._create_tautulli_entry()
+
+    async def async_step_plex(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Collect and validate optional Plex enrichment credentials."""
+        errors: dict[str, str] = {}
+        values = user_input or {}
+
+        if user_input is not None:
+            token = user_input.get(CONF_PLEX_TOKEN, "").strip()
+            plex_verify_ssl = user_input.get(CONF_PLEX_VERIFY_SSL, True)
+            if not token:
+                errors[CONF_PLEX_TOKEN] = "plex_token_required"
 
             try:
-                resp = await api.get_server_info()
+                base_url = _normalize_base_url(
+                    user_input.get(CONF_PLEX_BASEURL, "")
+                    or self._plex_base_from_tautulli
+                )
+            except ValueError:
+                errors[CONF_PLEX_BASEURL] = "invalid_url"
+            else:
+                if not errors:
+                    session = async_get_clientsession(
+                        self.hass, verify_ssl=plex_verify_ssl
+                    )
+                    try:
+                        await _async_validate_plex(
+                            session, base_url, token, plex_verify_ssl
+                        )
+                    except PlexAuthError:
+                        errors[CONF_PLEX_TOKEN] = "invalid_plex_token"
+                    except PlexConnectionError:
+                        errors["base"] = "cannot_connect_plex"
+                    else:
+                        self._flow_data[CONF_PLEX_TOKEN] = token
+                        self._flow_data[CONF_PLEX_BASEURL] = base_url
+                        self._flow_data[CONF_PLEX_VERIFY_SSL] = plex_verify_ssl
+                        return self._create_tautulli_entry()
 
-                server_name = user_input.get("server_name", "").strip()
-                if not server_name:
-                    server_name = resp["response"]["data"].get("pms_name", "")
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PLEX_TOKEN): _password_selector("new-password"),
+                vol.Required(
+                    CONF_PLEX_BASEURL,
+                    default=values.get(
+                        CONF_PLEX_BASEURL, self._plex_base_from_tautulli
+                    ),
+                ): str,
+                vol.Optional(CONF_PLEX_VERIFY_SSL, default=True): bool,
+            }
+        )
+        return self.async_show_form(step_id="plex", data_schema=schema, errors=errors)
 
-                # Set unique ID to prevent duplicate entries for the same server
-                pms_identifier = resp["response"]["data"].get("pms_identifier", url)
-                await self.async_set_unique_id(pms_identifier)
-                self._abort_if_unique_id_configured()
+    async def async_step_reauth(
+        self, entry_data: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Start reauthentication for an existing Tautulli entry."""
+        return await self.async_step_reauth_confirm()
 
-                self._flow_data.update({
-                    "server_name": server_name,
-                    CONF_URL: url,
-                    CONF_API_KEY: user_input[CONF_API_KEY],
-                    CONF_VERIFY_SSL: verify_ssl,
-                })
-                self._plex_base_from_tautulli = resp["response"]["data"].get("pms_url", "")
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Validate a replacement Tautulli API key."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
 
-                return await self.async_step_advanced()
-
+        if user_input is not None:
+            api_key = user_input[CONF_API_KEY].strip()
+            url = entry.data[CONF_URL]
+            verify_ssl = entry.data.get(CONF_VERIFY_SSL, True)
+            session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
+            api = TautulliAPI(url, api_key, session, verify_ssl)
+            try:
+                response = await api.get_server_info()
             except TautulliAuthError:
                 errors["base"] = "invalid_api_key"
-            except TautulliConnectionError:
+            except (TautulliConnectionError, aiohttp.ClientConnectionError):
                 errors["base"] = "cannot_connect"
-            except aiohttp.ClientConnectionError:
-                errors["base"] = "cannot_connect"
-            except Exception as e:
-                _LOGGER.exception("Error in Tautulli config flow user step: %s", e)
+            except Exception:
+                _LOGGER.exception("Unexpected Tautulli reauthentication error")
                 errors["base"] = "unknown"
-
-        return self._show_tautulli_form(errors, user_input)
-
-    def _show_tautulli_form(self, errors=None, user_input=None):
-        user_input = user_input or {}
-        schema = vol.Schema({
-            vol.Optional("server_name", default=user_input.get("server_name", "")): str,
-            vol.Required(CONF_URL, default=user_input.get(CONF_URL, "")): str,
-            vol.Required(CONF_API_KEY, default=user_input.get(CONF_API_KEY, "")): str,
-            vol.Optional(CONF_VERIFY_SSL, default=user_input.get(CONF_VERIFY_SSL, True)): bool,
-        })
-        return self.async_show_form(
-            step_id="user", data_schema=schema, errors=errors or {}
-        )
-
-    async def async_step_advanced(self, user_input=None):
-        """
-        Step 2: advanced toggles (session intervals, stats, plus plex toggle).
-        """
-        if user_input is not None:
-            session_interval = user_input.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
-            image_proxy = user_input.get(CONF_IMAGE_PROXY, False)
-            geo = user_input.get(CONF_ENABLE_IP_GEOLOCATION, False)
-            geo_provider = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
-            adv_attrs = user_input.get(CONF_ADVANCED_ATTRIBUTES, False)
-            enable_stats = user_input.get(CONF_ENABLE_STATISTICS, False)
-            stats_mtd = user_input.get(CONF_STATS_MONTH_TO_DATE, False)
-            stats_interval = user_input.get(CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL)
-            stats_days = user_input.get(CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS) if enable_stats else 0
-
-            plex_enabled_new = user_input.get("enable_plex_integration", False)
-
-            self._flow_data.update({
-                CONF_SESSION_INTERVAL: session_interval,
-                CONF_IMAGE_PROXY: image_proxy,
-                CONF_ENABLE_IP_GEOLOCATION: geo,
-                CONF_GEO_PROVIDER: geo_provider,
-                CONF_ADVANCED_ATTRIBUTES: adv_attrs,
-                CONF_ENABLE_STATISTICS: enable_stats,
-                CONF_STATS_MONTH_TO_DATE: stats_mtd,
-                CONF_STATISTICS_INTERVAL: stats_interval,
-                CONF_STATISTICS_DAYS: stats_days,
-            })
-
-            if plex_enabled_new:
-                return await self.async_step_plex()
             else:
-                return self._create_tautulli_entry()
+                await self.async_set_unique_id(_server_unique_id(response, url))
+                self._abort_if_unique_id_mismatch(reason="wrong_server")
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={CONF_API_KEY: api_key},
+                )
 
-        return self._show_advanced_form()
-
-    def _show_advanced_form(self, errors=None):
-        schema = vol.Schema({
-            vol.Required(CONF_SESSION_INTERVAL, default=DEFAULT_SESSION_INTERVAL): vol.All(int, vol.Range(min=1)),
-            vol.Optional(CONF_IMAGE_PROXY, default=False): bool,
-            vol.Optional(CONF_ENABLE_IP_GEOLOCATION, default=False): bool,
-            vol.Optional(CONF_GEO_PROVIDER, default=GEO_PROVIDER_TAUTULLI): vol.In(
-                [GEO_PROVIDER_TAUTULLI, GEO_PROVIDER_IP_API]
-            ),
-            vol.Optional("enable_plex_integration", default=False): bool,
-            vol.Optional(CONF_ADVANCED_ATTRIBUTES, default=False): bool,
-            vol.Optional(CONF_ENABLE_STATISTICS, default=False): bool,
-            vol.Optional(CONF_STATS_MONTH_TO_DATE, default=False): bool,
-            vol.Optional(CONF_STATISTICS_DAYS, default=DEFAULT_STATISTICS_DAYS): vol.All(int, vol.Range(min=1)),
-            vol.Optional(CONF_STATISTICS_INTERVAL, default=DEFAULT_STATISTICS_INTERVAL): vol.All(int, vol.Range(min=60)),
-        })
+        schema = vol.Schema(
+            {vol.Required(CONF_API_KEY): _password_selector("new-password")}
+        )
         return self.async_show_form(
-            step_id="advanced", data_schema=schema, errors=errors or {}
+            step_id="reauth_confirm", data_schema=schema, errors=errors
         )
 
-    async def async_step_plex(self, user_input=None):
-        """
-        Step 3: If plex was toggled on, gather plex_token + plex_base_url.
-        """
-        errors = {}
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Update non-authentication Tautulli connection details."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        values = user_input or {}
+
         if user_input is not None:
-            plex_token = user_input.get(CONF_PLEX_TOKEN, "").strip()
-            if not plex_token:
-                errors[CONF_PLEX_TOKEN] = "plex_token_required"
-            elif len(plex_token) < 20:
-                errors[CONF_PLEX_TOKEN] = "invalid_plex_token"
-
-            if not errors:
-                self._flow_data[CONF_PLEX_TOKEN] = plex_token
-                self._flow_data[CONF_PLEX_ENABLED] = True
-
-                plex_base_input = user_input.get(CONF_PLEX_BASEURL, "").strip().rstrip("/")
-                if plex_base_input:
-                    self._flow_data[CONF_PLEX_BASEURL] = plex_base_input
+            try:
+                url = _normalize_base_url(user_input[CONF_URL])
+            except ValueError:
+                errors[CONF_URL] = "invalid_url"
+            else:
+                verify_ssl = user_input.get(CONF_VERIFY_SSL, True)
+                session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
+                api = TautulliAPI(url, entry.data[CONF_API_KEY], session, verify_ssl)
+                try:
+                    response = await api.get_server_info()
+                except TautulliAuthError:
+                    errors["base"] = "invalid_api_key_reauth"
+                except (TautulliConnectionError, aiohttp.ClientConnectionError):
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected Tautulli reconfiguration error")
+                    errors["base"] = "unknown"
                 else:
-                    self._flow_data[CONF_PLEX_BASEURL] = self._plex_base_from_tautulli.rstrip("/")
+                    await self.async_set_unique_id(_server_unique_id(response, url))
+                    self._abort_if_unique_id_mismatch(reason="wrong_server")
+                    data = _server_data(response)
+                    server_name = user_input.get(CONF_SERVER_NAME, "").strip()
+                    server_name = server_name or data.get("pms_name") or entry.title
+                    return self.async_update_reload_and_abort(
+                        entry,
+                        title=server_name,
+                        data_updates={
+                            CONF_SERVER_NAME: server_name,
+                            CONF_URL: url,
+                            CONF_VERIFY_SSL: verify_ssl,
+                        },
+                    )
 
-                return self._create_tautulli_entry()
-
-        default_base = self._plex_base_from_tautulli
-        plex_schema = vol.Schema({
-            vol.Required(CONF_PLEX_TOKEN, default=""): str,
-            vol.Optional(CONF_PLEX_BASEURL, default=default_base): str,
-        })
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_SERVER_NAME,
+                    default=values.get(
+                        CONF_SERVER_NAME,
+                        entry.data.get(CONF_SERVER_NAME, entry.title),
+                    ),
+                ): str,
+                vol.Required(
+                    CONF_URL,
+                    default=values.get(CONF_URL, entry.data.get(CONF_URL, "")),
+                ): str,
+                vol.Optional(
+                    CONF_VERIFY_SSL,
+                    default=values.get(
+                        CONF_VERIFY_SSL,
+                        entry.data.get(CONF_VERIFY_SSL, True),
+                    ),
+                ): bool,
+            }
+        )
         return self.async_show_form(
-            step_id="plex", data_schema=plex_schema, errors=errors
+            step_id="reconfigure", data_schema=schema, errors=errors
         )
 
-    def _create_tautulli_entry(self):
-        """
-        Build the config entry data+options from self._flow_data.
-        """
-        # If plex wasn't toggled on
-        if CONF_PLEX_ENABLED not in self._flow_data:
-            self._flow_data[CONF_PLEX_ENABLED] = False
+    def _create_tautulli_entry(self) -> config_entries.ConfigFlowResult:
+        """Create a config entry from the validated setup data."""
+        if not self._flow_data[CONF_PLEX_ENABLED]:
             self._flow_data[CONF_PLEX_TOKEN] = ""
             self._flow_data[CONF_PLEX_BASEURL] = ""
+            self._flow_data[CONF_PLEX_VERIFY_SSL] = True
 
         data = {
             CONF_URL: self._flow_data[CONF_URL],
             CONF_API_KEY: self._flow_data[CONF_API_KEY],
             CONF_VERIFY_SSL: self._flow_data[CONF_VERIFY_SSL],
-            "server_name": self._flow_data.get("server_name", ""),
-            # Add Plex fields to data too
+            CONF_SERVER_NAME: self._flow_data.get(CONF_SERVER_NAME, ""),
             CONF_PLEX_ENABLED: self._flow_data[CONF_PLEX_ENABLED],
             CONF_PLEX_TOKEN: self._flow_data[CONF_PLEX_TOKEN],
             CONF_PLEX_BASEURL: self._flow_data[CONF_PLEX_BASEURL],
+            CONF_PLEX_VERIFY_SSL: self._flow_data[CONF_PLEX_VERIFY_SSL],
         }
-
         options = {
             CONF_SESSION_INTERVAL: self._flow_data[CONF_SESSION_INTERVAL],
-            CONF_IMAGE_PROXY: self._flow_data[CONF_IMAGE_PROXY],
             CONF_ENABLE_IP_GEOLOCATION: self._flow_data[CONF_ENABLE_IP_GEOLOCATION],
-            CONF_GEO_PROVIDER: self._flow_data.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI),
+            CONF_GEO_PROVIDER: self._flow_data[CONF_GEO_PROVIDER],
+            CONF_EXPOSE_DETAILED_LOCATION: self._flow_data[
+                CONF_EXPOSE_DETAILED_LOCATION
+            ],
             CONF_ADVANCED_ATTRIBUTES: self._flow_data[CONF_ADVANCED_ATTRIBUTES],
             CONF_ENABLE_STATISTICS: self._flow_data[CONF_ENABLE_STATISTICS],
             CONF_STATS_MONTH_TO_DATE: self._flow_data[CONF_STATS_MONTH_TO_DATE],
@@ -224,170 +404,16 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_STATISTICS_DAYS: self._flow_data[CONF_STATISTICS_DAYS],
             CONF_PLEX_ENABLED: self._flow_data[CONF_PLEX_ENABLED],
         }
-
         return self.async_create_entry(
-            title=self._flow_data.get("server_name") or "Tautulli Active Streams",
+            title=self._flow_data.get(CONF_SERVER_NAME) or "Tautulli Active Streams",
             data=data,
             options=options,
         )
 
-
     @staticmethod
     @callback
-    def async_get_options_flow(config_entry):
-        """Get the options flow for this handler."""
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> TautulliOptionsFlowHandler:
+        """Return the options flow handler."""
         return TautulliOptionsFlowHandler(config_entry)
-
-
-class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
-    """
-    Post-setup options. If user toggles plex from off => on, gather token/base.
-    We'll also update config_entry.data so the sensor code sees them in `.data`.
-    """
-
-    def __init__(self, config_entry: config_entries.ConfigEntry):
-        # Don't store config_entry directly to avoid deprecation warning
-        self.entry_id = config_entry.entry_id
-        self.options = dict(config_entry.options)
-        self._plex_enabled_old = self.options.get(CONF_PLEX_ENABLED, False)
-
-    async def async_step_init(self, user_input=None):
-        """Show toggles. If plex toggled from off => on, go to plex_setup."""
-        if user_input is not None:
-            self.options[CONF_SESSION_INTERVAL] = user_input[CONF_SESSION_INTERVAL]
-            self.options[CONF_IMAGE_PROXY] = user_input[CONF_IMAGE_PROXY]
-            self.options[CONF_ENABLE_IP_GEOLOCATION] = user_input[CONF_ENABLE_IP_GEOLOCATION]
-            self.options[CONF_GEO_PROVIDER] = user_input.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
-            self.options[CONF_ADVANCED_ATTRIBUTES] = user_input[CONF_ADVANCED_ATTRIBUTES]
-            self.options[CONF_ENABLE_STATISTICS] = user_input[CONF_ENABLE_STATISTICS]
-            self.options[CONF_STATS_MONTH_TO_DATE] = user_input[CONF_STATS_MONTH_TO_DATE]
-            self.options[CONF_STATISTICS_DAYS] = user_input[CONF_STATISTICS_DAYS]
-            self.options[CONF_STATISTICS_INTERVAL] = user_input[CONF_STATISTICS_INTERVAL]
-
-            plex_enabled_new = user_input.get(CONF_PLEX_ENABLED, False)
-            self.options[CONF_PLEX_ENABLED] = plex_enabled_new
-
-            # Only go to plex_setup when toggling Plex from off → on
-            # or when user explicitly chose to reconfigure Plex
-            if plex_enabled_new and not self._plex_enabled_old:
-                return await self.async_step_plex_setup()
-            if user_input.get("reconfigure_plex", False) and plex_enabled_new:
-                return await self.async_step_plex_setup()
-
-            # Plex already on (no change) or disabled — finalize
-            self._update_config_entry_data()
-            return self.async_create_entry(title="", data=self.options)
-
-        data_schema = vol.Schema({
-            vol.Required(
-                CONF_SESSION_INTERVAL,
-                default=self.options.get(CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL)
-            ): vol.All(int, vol.Range(min=1)),
-
-            vol.Optional(
-                CONF_IMAGE_PROXY, default=self.options.get(CONF_IMAGE_PROXY, False)
-            ): bool,
-            vol.Optional(
-                CONF_ENABLE_IP_GEOLOCATION, default=self.options.get(CONF_ENABLE_IP_GEOLOCATION, False)
-            ): bool,
-            vol.Optional(
-                CONF_GEO_PROVIDER, default=self.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
-            ): vol.In([GEO_PROVIDER_TAUTULLI, GEO_PROVIDER_IP_API]),
-
-            vol.Optional(
-                CONF_PLEX_ENABLED, default=self.options.get(CONF_PLEX_ENABLED, False)
-            ): bool,
-            vol.Optional(
-                "reconfigure_plex", default=False
-            ): bool,
-
-            vol.Optional(
-                CONF_ADVANCED_ATTRIBUTES, default=self.options.get(CONF_ADVANCED_ATTRIBUTES, False)
-            ): bool,
-            vol.Optional(
-                CONF_ENABLE_STATISTICS, default=self.options.get(CONF_ENABLE_STATISTICS, False)
-            ): bool,
-            vol.Optional(
-                CONF_STATS_MONTH_TO_DATE, default=self.options.get(CONF_STATS_MONTH_TO_DATE, False)
-            ): bool,
-            vol.Optional(
-                CONF_STATISTICS_DAYS, default=self.options.get(CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS)
-            ): vol.All(int, vol.Range(min=1)),
-            vol.Optional(
-                CONF_STATISTICS_INTERVAL, default=self.options.get(CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL)
-            ): vol.All(int, vol.Range(min=60)),
-        })
-        return self.async_show_form(step_id="init", data_schema=data_schema)
-
-    async def async_step_plex_setup(self, user_input=None):
-        """Gather or update plex token/base. Then sync to data."""
-        errors = {}
-        if user_input is not None:
-            plex_token = user_input.get(CONF_PLEX_TOKEN, "").strip()
-            # Validate token before saving
-            if not plex_token:
-                errors[CONF_PLEX_TOKEN] = "plex_token_required"
-            elif len(plex_token) < 20:
-                errors[CONF_PLEX_TOKEN] = "invalid_plex_token"
-                
-            if not errors:
-                # Store plex_token in data only (encrypted), not in options
-                self._plex_token_new = plex_token
-                plex_base = user_input.get(CONF_PLEX_BASEURL, "").strip()
-                self._plex_base_new = plex_base.rstrip("/")
-                self.options[CONF_PLEX_ENABLED] = True
-                
-                # Sync to config entry data before creating entry
-                self._update_config_entry_data()
-                return self.async_create_entry(title="", data=self.options)
-
-        fallback_token = ""
-        fallback_baseurl = ""
-
-        # Pre-fill with existing values when Plex is already configured
-        config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
-        if config_entry:
-            fallback_token = config_entry.data.get(CONF_PLEX_TOKEN, "")
-            fallback_baseurl = config_entry.data.get(CONF_PLEX_BASEURL, "")
-
-        plex_schema = vol.Schema({
-            vol.Required(CONF_PLEX_TOKEN, default=fallback_token): str,
-            vol.Optional(CONF_PLEX_BASEURL, default=fallback_baseurl): str,        })
-        return self.async_show_form(
-            step_id="plex_setup",
-            data_schema=plex_schema,
-            errors=errors
-        )
-        
-    def _update_config_entry_data(self):
-        """
-        Sync the plex fields from self.options into config_entry.data
-        so the sensor code can read them from entry.data.
-        Credentials (plex_token) are stored only in data, never in options.
-        """
-        # Get the current config entry from the hass instance using entry_id
-        config_entry = self.hass.config_entries.async_get_entry(self.entry_id)
-        if not config_entry:
-            _LOGGER.error("Could not find config entry with id %s", self.entry_id)
-            return
-            
-        new_data = dict(config_entry.data)
-
-        plex_enabled = self.options.get(CONF_PLEX_ENABLED, False)
-        new_data[CONF_PLEX_ENABLED] = plex_enabled
-
-        if plex_enabled:
-            # Update base URL (use new value if provided, else keep existing)
-            new_data[CONF_PLEX_BASEURL] = getattr(self, "_plex_base_new", new_data.get(CONF_PLEX_BASEURL, ""))
-            # Only update plex_token if a new one was provided
-            if hasattr(self, "_plex_token_new"):
-                new_data[CONF_PLEX_TOKEN] = self._plex_token_new
-        else:
-            # Plex disabled — clear credentials from stored data
-            new_data[CONF_PLEX_TOKEN] = ""
-            new_data[CONF_PLEX_BASEURL] = ""
-
-        self.hass.config_entries.async_update_entry(
-            config_entry,
-            data=new_data,
-        )

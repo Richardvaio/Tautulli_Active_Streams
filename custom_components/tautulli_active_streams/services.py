@@ -1,31 +1,38 @@
-import logging
 import asyncio
-import voluptuous as vol
+import logging
+
 import homeassistant.helpers.config_validation as cv
+import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall
 
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-KILL_ALL_SCHEMA = vol.Schema({
-    vol.Optional("message", default="Stream ended by admin."): cv.string,
-})
+KILL_ALL_SCHEMA = vol.Schema(
+    {
+        vol.Optional("message", default="Stream ended by admin."): cv.string,
+    }
+)
 
-KILL_USER_SCHEMA = vol.Schema({
-    vol.Required("user"): cv.string,
-    vol.Optional("message", default="Stream ended by admin."): cv.string,
-})
+KILL_USER_SCHEMA = vol.Schema(
+    {
+        vol.Required("user"): cv.string,
+        vol.Optional("message", default="Stream ended by admin."): cv.string,
+    }
+)
 
-KILL_SESSION_SCHEMA = vol.Schema({
-    vol.Required("session_id"): cv.string,
-    vol.Optional("message", default="Stream ended by admin."): cv.string,
-})
+KILL_SESSION_SCHEMA = vol.Schema(
+    {
+        vol.Required("session_id"): cv.string,
+        vol.Optional("message", default="Stream ended by admin."): cv.string,
+    }
+)
 
 
 async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> None:
     """Register kill-stream services for Tautulli Active Streams.
-    
+
     Services dynamically resolve all active config entries at call time,
     so they work correctly with multiple Tautulli instances.
     """
@@ -33,8 +40,12 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
     def _get_all_entries():
         """Return a list of (api, sessions_coordinator) for every loaded entry."""
         results = []
-        for eid, data_dict in hass.data.get(DOMAIN, {}).items():
-            if isinstance(data_dict, dict) and "api" in data_dict and "sessions_coordinator" in data_dict:
+        for data_dict in hass.data.get(DOMAIN, {}).values():
+            if (
+                isinstance(data_dict, dict)
+                and "api" in data_dict
+                and "sessions_coordinator" in data_dict
+            ):
                 results.append((data_dict["api"], data_dict["sessions_coordinator"]))
         return results
 
@@ -50,15 +61,19 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
             sessions = coord.data.get("sessions", [])
             if not sessions:
                 continue
-            _LOGGER.info("Terminating %d active sessions. message=%s", len(sessions), message)
+            _LOGGER.info(
+                "Terminating %d active sessions. message=%s", len(sessions), message
+            )
             tasks = []
             for s in sessions:
                 sid = s.get("session_id")
                 if sid:
                     tasks.append(entry_api.terminate_session(sid, message=message))
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            success = sum(1 for r in results if not isinstance(r, Exception))
-            _LOGGER.info("Killed %d/%d sessions successfully", success, len(sessions))
+            success = sum(result is True for result in results)
+            _LOGGER.info(
+                "Killed %d/%d requested sessions successfully", success, len(tasks)
+            )
 
     async def handle_kill_user_streams(call: ServiceCall) -> None:
         user = call.data["user"].strip().lower()
@@ -84,15 +99,25 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
                     matched.append(s)
             if not matched:
                 continue
-            _LOGGER.info("Terminating %d sessions for user '%s'. message=%s", len(matched), user, message)
+            _LOGGER.info(
+                "Terminating %d sessions for user '%s'. message=%s",
+                len(matched),
+                user,
+                message,
+            )
             tasks = []
             for s in matched:
                 sid = s.get("session_id")
                 if sid:
                     tasks.append(entry_api.terminate_session(sid, message=message))
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            success = sum(1 for r in results if not isinstance(r, Exception))
-            _LOGGER.info("Killed %d/%d sessions for user '%s'", success, len(matched), user)
+            success = sum(result is True for result in results)
+            _LOGGER.info(
+                "Killed %d/%d requested sessions for user '%s'",
+                success,
+                len(tasks),
+                user,
+            )
 
     async def handle_kill_session_stream(call: ServiceCall) -> None:
         sid = call.data["session_id"].strip()
@@ -107,10 +132,15 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
             sessions = coord.data.get("sessions", [])
             if sid in [x.get("session_id") for x in sessions]:
                 try:
-                    await entry_api.terminate_session(sid, message=message)
-                    _LOGGER.info("Terminated session %s", sid)
+                    terminated = await entry_api.terminate_session(sid, message=message)
+                    if terminated:
+                        _LOGGER.info("Terminated session %s", sid)
+                    else:
+                        _LOGGER.warning(
+                            "Tautulli rejected termination of session %s", sid
+                        )
                     return
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - service call boundary
                     _LOGGER.error("Error killing session %s: %s", sid, exc)
                     return
         _LOGGER.warning("Session %s not found in any active Tautulli instance", sid)
@@ -123,7 +153,12 @@ async def async_setup_kill_stream_services(hass: HomeAssistant, entry, api) -> N
         DOMAIN, "kill_user_streams", handle_kill_user_streams, schema=KILL_USER_SCHEMA
     )
     hass.services.async_register(
-        DOMAIN, "kill_session_stream", handle_kill_session_stream, schema=KILL_SESSION_SCHEMA
+        DOMAIN,
+        "kill_session_stream",
+        handle_kill_session_stream,
+        schema=KILL_SESSION_SCHEMA,
     )
 
-    _LOGGER.debug("Tautulli kill-stream services set up for entry_id=%s.", entry.entry_id)
+    _LOGGER.debug(
+        "Tautulli kill-stream services set up for entry_id=%s.", entry.entry_id
+    )

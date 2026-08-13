@@ -18,9 +18,11 @@ CONF_STATS_MONTH_TO_DATE = "stats_month_to_date"
 CONF_STATISTICS_INTERVAL = "statistics_interval"
 CONF_STATISTICS_DAYS = "statistics_days"
 CONF_ADVANCED_ATTRIBUTES = "advanced_attributes"
-CONF_IMAGE_PROXY = "image_proxy"
 CONF_ENABLE_IP_GEOLOCATION = "enable_ip_geolocation"
+CONF_EXPOSE_DETAILED_LOCATION = "expose_detailed_location"
 CONF_GEO_PROVIDER = "geo_provider"
+
+MAX_HISTORY_RECORDS = 25000
 
 GEO_PROVIDER_TAUTULLI = "tautulli"
 GEO_PROVIDER_IP_API = "ip-api"
@@ -31,6 +33,7 @@ GEO_PROVIDER_IP_API = "ip-api"
 CONF_PLEX_ENABLED = "plex_enabled"
 CONF_PLEX_TOKEN = "plex_token"
 CONF_PLEX_BASEURL = "plex_base_url"
+CONF_PLEX_VERIFY_SSL = "plex_verify_ssl"
 
 
 def format_seconds_to_min_sec(total_seconds: float) -> str:
@@ -48,6 +51,11 @@ def is_private_ip(ip: str) -> bool:
     """Return True if the IP address is private/reserved (not publicly routable)."""
     try:
         addr = ipaddress.ip_address(ip)
-        return addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+        return (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+        )
     except ValueError:
         return True  # If it can't be parsed, skip the lookup

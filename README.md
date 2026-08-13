@@ -156,15 +156,30 @@ These new features are designed to work seamlessly with automations and will bec
    
 * **Setup in Home Assistant:**
   * Go to **Settings → Devices & Services** and **Add** the integration.
-  * Enter your **Tautulli details (URL, API Key)**, 
-  * Set the Refresh Interval.
+  * Enter your **Tautulli URL and API key**. The connection is tested before it is saved.
+  * Choose the active-stream refresh interval and any optional features.
+  * Setup only displays the additional pages required by the features you enable.
 
-  * (Optional) Enable:
-    - Image Proxy Service
-    - IP Geolocation
-    - Advanced Attributes
-    - Plex Integration
-    - Statistics Service
+### Managing the integration
+
+Open **Settings → Devices & Services → Tautulli Active Streams**:
+
+- **Configure** opens separate sections for general options, watch-history
+  statistics, location/privacy and optional Plex metadata enrichment.
+- **Reconfigure** changes the friendly name, Tautulli URL and SSL verification.
+- If Tautulli rejects the saved API key, Home Assistant automatically starts a
+  reauthentication flow for a replacement key.
+
+Plex access is optional. When enabled, the Plex URL and token are tested against
+the server before being saved. Existing tokens are never displayed in the form;
+leave the token field blank to keep the current token. Disabling Plex enrichment
+requires confirmation and removes the saved Plex credentials.
+
+IP geolocation is also optional. The Tautulli provider uses Tautulli's local
+GeoLite2 database. Selecting `ip-api.com` sends public stream IP addresses to
+that external service. Public IP addresses, postal codes and coordinates are not
+exposed as Home Assistant attributes unless **Expose detailed location
+attributes** is explicitly enabled.
 ---
 
 # Don't forget to add the Card below.
@@ -209,7 +224,8 @@ Cards now in repo, one for Movies/Tv shows and one for Music only
 ### No Data Appearing?
 
 - Ensure your **Tautulli API key, Url** are correct.
-- Restart Home Assistant after making changes.
+- Use **Reconfigure** to update the Tautulli address. Credential failures expose
+  a **Reauthenticate** action automatically.
 - Check **Developer Tools** → **States** for `sensor.plex_session_*`.
 
 <br>

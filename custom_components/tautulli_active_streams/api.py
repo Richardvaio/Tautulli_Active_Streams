@@ -1,6 +1,7 @@
-import logging
-import aiohttp
 import asyncio
+import logging
+
+import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,6 +16,7 @@ class TautulliAuthError(Exception):
 
 class TautulliAPI:
     """Handles communication with the Tautulli API."""
+
     def __init__(self, url, api_key, session, verify_ssl=True, timeout=10):
         """
         Initialize the API client.
@@ -53,6 +55,18 @@ class TautulliAPI:
         """Return the base URL without the API key for safe logging."""
         return f"{self._base_url}?apikey=[REDACTED]&cmd="
 
+    @staticmethod
+    def _validate_payload(payload):
+        """Raise an authentication error for API-wide credential failures."""
+        response = payload.get("response", {}) if isinstance(payload, dict) else {}
+        if response.get("result") != "error":
+            return payload
+        message = str(response.get("message", "Unknown Tautulli error"))
+        lowered = message.lower()
+        if "api key" in lowered or "apikey" in lowered or "unauthorized" in lowered:
+            raise TautulliAuthError(message)
+        return payload
+
     async def _call_tautulli(self, cmd, params=None, method="GET"):
         """
         Generic helper to call any Tautulli API command.
@@ -64,22 +78,16 @@ class TautulliAPI:
         url = f"{self._base_url}?apikey={self._api_key}&cmd={cmd}"
         method = method.upper()
 
-        _LOGGER.debug(
-            "TautulliAPI: calling cmd=%s method=%s",
-            cmd, method
-        )
+        _LOGGER.debug("TautulliAPI: calling cmd=%s method=%s", cmd, method)
 
         try:
             if method == "POST":
                 async with self._session.post(
-                    url,
-                    data=params,
-                    timeout=self._timeout,
-                    ssl=self._verify_ssl
+                    url, data=params, timeout=self._timeout, ssl=self._verify_ssl
                 ) as response:
                     if response.status == 200:
                         try:
-                            return await response.json()
+                            return self._validate_payload(await response.json())
                         except Exception as json_err:
                             raise TautulliConnectionError(
                                 f"Invalid JSON from Tautulli for {cmd}: {json_err}"
@@ -90,14 +98,11 @@ class TautulliAPI:
                         )
             else:
                 async with self._session.get(
-                    url,
-                    params=params,
-                    timeout=self._timeout,
-                    ssl=self._verify_ssl
+                    url, params=params, timeout=self._timeout, ssl=self._verify_ssl
                 ) as response:
                     if response.status == 200:
                         try:
-                            return await response.json()
+                            return self._validate_payload(await response.json())
                         except Exception as json_err:
                             raise TautulliConnectionError(
                                 f"Invalid JSON from Tautulli for {cmd}: {json_err}"
@@ -108,6 +113,8 @@ class TautulliAPI:
                         )
         except TautulliConnectionError:
             raise  # Re-raise our own exceptions
+        except TautulliAuthError:
+            raise
         except asyncio.TimeoutError as err:
             raise TautulliConnectionError(
                 f"Tautulli API request '{cmd}' timed out after {self._timeout.total}s"
@@ -137,8 +144,12 @@ class TautulliAPI:
 
         diagnostics = {
             "stream_count": response_data.get("stream_count", 0),
-            "stream_count_direct_play": response_data.get("stream_count_direct_play", 0),
-            "stream_count_direct_stream": response_data.get("stream_count_direct_stream", 0),
+            "stream_count_direct_play": response_data.get(
+                "stream_count_direct_play", 0
+            ),
+            "stream_count_direct_stream": response_data.get(
+                "stream_count_direct_stream", 0
+            ),
             "stream_count_transcode": response_data.get("stream_count_transcode", 0),
             "total_bandwidth": response_data.get("total_bandwidth", 0),
             "lan_bandwidth": response_data.get("lan_bandwidth", 0),
@@ -160,7 +171,9 @@ class TautulliAPI:
         resp = await self._call_tautulli("get_server_info", method="GET")
 
         if not resp:
-            raise TautulliConnectionError("Empty response from Tautulli — check URL and network")
+            raise TautulliConnectionError(
+                "Empty response from Tautulli — check URL and network"
+            )
 
         result = resp.get("response", {}).get("result")
         if result == "success":
@@ -171,7 +184,6 @@ class TautulliAPI:
         if "invalid" in msg.lower() or "api" in msg.lower():
             raise TautulliAuthError(f"Invalid API key: {msg}")
         raise TautulliConnectionError(f"Tautulli error: {msg}")
-
 
     async def get_history(self, **params):
         """
@@ -201,14 +213,16 @@ class TautulliAPI:
             return response_data.get("data", {})
         else:
             return {}
-        
+
     async def terminate_session(self, session_id, message=""):
         """Kill a Tautulli session by session_id.
 
         Returns True on success, raises on failure.
         """
         params = {"session_id": session_id, "message": message}
-        resp = await self._call_tautulli("terminate_session", params=params, method="GET")
+        resp = await self._call_tautulli(
+            "terminate_session", params=params, method="GET"
+        )
         result = resp.get("response", {}).get("result")
         if result != "success":
             msg = resp.get("response", {}).get("message", "Unknown error")

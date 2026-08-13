@@ -2,12 +2,12 @@
     "domain": "tautulli_active_streams",
     "name": "Tautulli Active Streams",
     "documentation": "https://github.com/Richardvaio/Tautulli_Active_Streams",
+    "issue_tracker": "https://github.com/Richardvaio/Tautulli_Active_Streams/issues",
     "integration_type": "hub",
     "iot_class": "local_polling",
     "requirements": [],
     "dependencies": [],
     "codeowners": ["@Richardvaio"],
     "config_flow": true,
-    "import_executor": true,
-    "version": "2.5.7"
+    "version": "2.6.0"
 }

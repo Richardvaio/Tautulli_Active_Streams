@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
+import math
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.device_tracker import SourceType, TrackerEntity
@@ -13,7 +14,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 from homeassistant.util.dt import now as ha_now
 
-from .const import CONF_ENABLE_IP_GEOLOCATION, DOMAIN
+from .const import (
+    CONF_ENABLE_IP_GEOLOCATION,
+    CONF_EXPOSE_DETAILED_LOCATION,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +30,7 @@ def _as_float(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
 
-    if result != result or result in (float("inf"), float("-inf")):
+    if not math.isfinite(result):
         return None
     return result
 
@@ -186,15 +191,16 @@ class TautulliUserLocationTracker(CoordinatorEntity, TrackerEntity):
         attributes: dict[str, Any] = {
             "plex_user_id": self._user_id,
             "username": username,
-            "ip_address": stats.get("last_ip"),
             "city": stats.get("geo_city"),
             "region": stats.get("geo_region"),
             "country": stats.get("geo_country"),
             "country_code": stats.get("geo_code"),
             "continent": stats.get("geo_continent"),
-            "postal_code": stats.get("geo_postal_code"),
             "timezone": stats.get("geo_timezone"),
         }
+        if self._entry.options.get(CONF_EXPOSE_DETAILED_LOCATION, False):
+            attributes["ip_address"] = stats.get("last_ip")
+            attributes["postal_code"] = stats.get("geo_postal_code")
 
         if last_stopped_ts := stats.get("last_stopped_ts"):
             last_watched = datetime.fromtimestamp(
@@ -209,7 +215,5 @@ class TautulliUserLocationTracker(CoordinatorEntity, TrackerEntity):
         """Refresh the display name and state from coordinator data."""
         if (record := self._current_record()) is not None:
             self._username = record[0]
-            self._attr_name = (
-                f"{self._username}: Tautulli last stream location"
-            )
+            self._attr_name = f"{self._username}: Tautulli last stream location"
         super()._handle_coordinator_update()
