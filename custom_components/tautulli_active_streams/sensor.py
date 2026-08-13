@@ -122,7 +122,8 @@ async def async_setup_entry(
 
         user_stats = history_coordinator.data.get("user_stats", {})
         if user_stats:
-            for username, stats_dict in user_stats.items():
+            for stats_dict in user_stats.values():
+                username = stats_dict.get("username", "Unknown")
                 user_id = stats_dict.get("user_id")
                 if user_id is None:
                     _LOGGER.warning(
@@ -217,9 +218,10 @@ async def async_setup_entry(
                 return
             new_sensors = []
             new_user_ids = []
-            for username, stats_dict in history_coordinator.data.get(
+            for stats_dict in history_coordinator.data.get(
                 "user_stats", {}
-            ).items():
+            ).values():
+                username = stats_dict.get("username", "Unknown")
                 user_id = stats_dict.get("user_id")
                 if user_id is None or str(user_id) in tracked_user_ids:
                     continue

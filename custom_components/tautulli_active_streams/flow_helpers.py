@@ -44,7 +44,7 @@ def normalize_base_url(value: str) -> str:
     try:
         parsed = urlsplit(value)
         # Accessing port also validates malformed/out-of-range port values.
-        parsed.port
+        _ = parsed.port
     except ValueError as err:
         raise ValueError("Invalid URL") from err
 

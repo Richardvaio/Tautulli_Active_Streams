@@ -52,7 +52,11 @@ If you enable **Plex Integration** and supply your **Plex Token** in the integra
 ##  Statistics
 
 - Separate Scan Interval  – Set how often HA updates Statistics data.
-- Fetch Range - Choose how far data should be fetched from default 30 days ago. 
+- Statistics period:
+    * **Rolling period** - Include the previous 1 to 365 days (30 days by default).
+    * **Calendar month** - Start from the first day of the current month.
+    * **Custom monthly cycle** - Start on a selected day from 1 to 31. Shorter months use their final day.
+- Changing periods does not delete or reset Tautulli history; it only changes the history included in the current statistics.
 - Detailed User Attributes – Each user sensor provides:
     * **Total Play Duration**
     * **Total Completion Rate**
@@ -94,6 +98,7 @@ Call the service from Developer Tools → Actions:
 ```yaml
 service: tautulli_active_streams.kill_all_streams
 data:
+  config_entry_id: "YOUR_TAUTULLI_CONFIG_ENTRY_ID"
   message: "Your Message Here"
 ```
 ---
@@ -103,7 +108,8 @@ Call the service for a specific user:
 ```yaml
 service: tautulli_active_streams.kill_user_streams
 data:
-  user: "john_doe"
+  config_entry_id: "YOUR_TAUTULLI_CONFIG_ENTRY_ID"
+  user_id: "12345678"
   message: "Your Message Here."
 ```
 ---
@@ -113,12 +119,19 @@ Call the service for a specific session_id:
 ```yaml
 service: tautulli_active_streams.kill_session_stream
 data:
+  config_entry_id: "YOUR_TAUTULLI_CONFIG_ENTRY_ID"
   session_id: "gxvzdoq4fjkjfmduq5dgf25hz"
   message: "Your Message Here."
 ```
 
 </pre>
 </details>
+
+The Tautulli server selector is optional when only one config entry is loaded
+and required when multiple servers are loaded. The stable Plex `user_id` is
+preferred for user termination; `user` remains available as a display-name
+fallback. User-triggered termination actions require an administrator account
+and can return per-session success and failure details.
 
 These new features are designed to work seamlessly with automations and will become even more powerful as additional data becomes available in future updates.
 
@@ -180,6 +193,12 @@ GeoLite2 database. Selecting `ip-api.com` sends public stream IP addresses to
 that external service. Public IP addresses, postal codes and coordinates are not
 exposed as Home Assistant attributes unless **Expose detailed location
 attributes** is explicitly enabled.
+
+Active-stream and derived user-stat attributes are intentionally excluded from
+Recorder. Their current values remain available to dashboards and automations,
+while entity state history such as playing/paused/off and total watch duration
+continues to be recorded without duplicating large, frequently changing
+attribute payloads.
 ---
 
 # Don't forget to add the Card below.

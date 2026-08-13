@@ -17,14 +17,22 @@ from .const import (
     CONF_PLEX_TOKEN,
     CONF_PLEX_VERIFY_SSL,
     CONF_SESSION_INTERVAL,
+    CONF_STATISTICS_CYCLE_DAY,
     CONF_STATISTICS_DAYS,
     CONF_STATISTICS_INTERVAL,
+    CONF_STATISTICS_PERIOD,
     CONF_STATS_MONTH_TO_DATE,
     DEFAULT_SESSION_INTERVAL,
+    DEFAULT_STATISTICS_CYCLE_DAY,
     DEFAULT_STATISTICS_DAYS,
     DEFAULT_STATISTICS_INTERVAL,
+    DEFAULT_STATISTICS_PERIOD,
     GEO_PROVIDER_IP_API,
     GEO_PROVIDER_TAUTULLI,
+    STATISTICS_PERIOD_CALENDAR_MONTH,
+    STATISTICS_PERIOD_CUSTOM_MONTH,
+    STATISTICS_PERIOD_ROLLING,
+    STATISTICS_PERIODS,
 )
 from .flow_helpers import (
     PlexAuthError,
@@ -46,6 +54,15 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         # Older setup flows stored zero while statistics were disabled.
         if self.options.get(CONF_STATISTICS_DAYS, 0) < 1:
             self.options[CONF_STATISTICS_DAYS] = DEFAULT_STATISTICS_DAYS
+        if CONF_STATISTICS_PERIOD not in self.options:
+            self.options[CONF_STATISTICS_PERIOD] = (
+                STATISTICS_PERIOD_CALENDAR_MONTH
+                if self.options.get(CONF_STATS_MONTH_TO_DATE, False)
+                else DEFAULT_STATISTICS_PERIOD
+            )
+        self.options.setdefault(
+            CONF_STATISTICS_CYCLE_DAY, DEFAULT_STATISTICS_CYCLE_DAY
+        )
         self._plex_enabled_old = bool(
             config_entry.data.get(
                 CONF_PLEX_ENABLED,
@@ -110,23 +127,28 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_statistics_details(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Configure statistics range and polling."""
+        """Choose the statistics period and polling interval."""
         if user_input is not None:
             self.options.update(user_input)
+            period = user_input[CONF_STATISTICS_PERIOD]
+            self.options[CONF_STATS_MONTH_TO_DATE] = (
+                period == STATISTICS_PERIOD_CALENDAR_MONTH
+            )
+            if period in {
+                STATISTICS_PERIOD_ROLLING,
+                STATISTICS_PERIOD_CUSTOM_MONTH,
+            }:
+                return await self.async_step_statistics_range()
             return self._finish()
 
         schema = vol.Schema(
             {
-                vol.Optional(
-                    CONF_STATS_MONTH_TO_DATE,
-                    default=self.options.get(CONF_STATS_MONTH_TO_DATE, False),
-                ): bool,
-                vol.Optional(
-                    CONF_STATISTICS_DAYS,
+                vol.Required(
+                    CONF_STATISTICS_PERIOD,
                     default=self.options.get(
-                        CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS
+                        CONF_STATISTICS_PERIOD, DEFAULT_STATISTICS_PERIOD
                     ),
-                ): vol.All(int, vol.Range(min=1)),
+                ): vol.In(STATISTICS_PERIODS),
                 vol.Optional(
                     CONF_STATISTICS_INTERVAL,
                     default=self.options.get(
@@ -136,6 +158,40 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             }
         )
         return self.async_show_form(step_id="statistics_details", data_schema=schema)
+
+    async def async_step_statistics_range(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Collect the setting relevant to the selected statistics period."""
+        if user_input is not None:
+            self.options.update(user_input)
+            return self._finish()
+
+        period = self.options[CONF_STATISTICS_PERIOD]
+        if period == STATISTICS_PERIOD_ROLLING:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_STATISTICS_DAYS,
+                        default=self.options.get(
+                            CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS
+                        ),
+                    ): vol.All(int, vol.Range(min=1, max=365))
+                }
+            )
+        else:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_STATISTICS_CYCLE_DAY,
+                        default=self.options.get(
+                            CONF_STATISTICS_CYCLE_DAY,
+                            DEFAULT_STATISTICS_CYCLE_DAY,
+                        ),
+                    ): vol.All(int, vol.Range(min=1, max=31))
+                }
+            )
+        return self.async_show_form(step_id="statistics_range", data_schema=schema)
 
     async def async_step_privacy(
         self, user_input: dict[str, Any] | None = None

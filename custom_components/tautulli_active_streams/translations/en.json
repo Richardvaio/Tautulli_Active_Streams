@@ -45,15 +45,26 @@
       },
       "statistics": {
         "title": "Watch-history statistics",
-        "description": "Configure the history range and how often it is refreshed.",
+        "description": "Choose the reporting period and how often statistics are refreshed.",
         "data": {
-          "stats_month_to_date": "Use month-to-date",
-          "statistics_days": "Rolling day range",
+          "statistics_period": "Statistics period",
           "statistics_interval": "Statistics refresh interval (seconds)"
         },
         "data_description": {
-          "statistics_days": "Used when month-to-date is disabled.",
+          "statistics_period": "Rolling uses a fixed number of recent days. Calendar month begins on day 1. Custom monthly cycle begins on your selected day.",
           "statistics_interval": "A longer interval reduces Tautulli API, database and Home Assistant recorder load."
+        }
+      },
+      "statistics_range": {
+        "title": "Statistics period details",
+        "description": "Configure the selected reporting period. No Tautulli history is deleted when a new period begins.",
+        "data": {
+          "statistics_days": "Rolling period (days)",
+          "statistics_cycle_day": "Monthly cycle start day"
+        },
+        "data_description": {
+          "statistics_days": "Include the previous 1 to 365 days.",
+          "statistics_cycle_day": "Choose 1 to 31. Shorter months use their final day."
         }
       },
       "plex": {
@@ -129,15 +140,26 @@
       },
       "statistics_details": {
         "title": "Statistics settings",
-        "description": "Choose the history range and refresh interval.",
+        "description": "Choose the reporting period and refresh interval.",
         "data": {
-          "stats_month_to_date": "Use month-to-date",
-          "statistics_days": "Rolling day range",
+          "statistics_period": "Statistics period",
           "statistics_interval": "Statistics refresh interval (seconds)"
         },
         "data_description": {
-          "statistics_days": "Used when month-to-date is disabled.",
+          "statistics_period": "Rolling uses a fixed number of recent days. Calendar month begins on day 1. Custom monthly cycle begins on your selected day.",
           "statistics_interval": "A longer interval reduces Tautulli API, database and Home Assistant recorder load."
+        }
+      },
+      "statistics_range": {
+        "title": "Statistics period details",
+        "description": "Configure the selected reporting period. No Tautulli history is deleted when a new period begins.",
+        "data": {
+          "statistics_days": "Rolling period (days)",
+          "statistics_cycle_day": "Monthly cycle start day"
+        },
+        "data_description": {
+          "statistics_days": "Include the previous 1 to 365 days.",
+          "statistics_cycle_day": "Choose 1 to 31. Shorter months use their final day."
         }
       },
       "privacy": {

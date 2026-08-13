@@ -85,32 +85,40 @@ class TautulliAPI:
                 async with self._session.post(
                     url, data=params, timeout=self._timeout, ssl=self._verify_ssl
                 ) as response:
-                    if response.status == 200:
-                        try:
-                            return self._validate_payload(await response.json())
-                        except Exception as json_err:
-                            raise TautulliConnectionError(
-                                f"Invalid JSON from Tautulli for {cmd}: {json_err}"
-                            ) from json_err
-                    else:
+                    if response.status in (401, 403):
+                        raise TautulliAuthError(
+                            f"Tautulli rejected the API key (HTTP {response.status})"
+                        )
+                    if response.status != 200:
                         raise TautulliConnectionError(
                             f"Non-200 status from Tautulli POST {cmd}: {response.status}"
                         )
+                    try:
+                        payload = await response.json()
+                    except (aiohttp.ContentTypeError, ValueError) as json_err:
+                        raise TautulliConnectionError(
+                            f"Invalid JSON from Tautulli for {cmd}: {json_err}"
+                        ) from json_err
+                    return self._validate_payload(payload)
             else:
                 async with self._session.get(
                     url, params=params, timeout=self._timeout, ssl=self._verify_ssl
                 ) as response:
-                    if response.status == 200:
-                        try:
-                            return self._validate_payload(await response.json())
-                        except Exception as json_err:
-                            raise TautulliConnectionError(
-                                f"Invalid JSON from Tautulli for {cmd}: {json_err}"
-                            ) from json_err
-                    else:
+                    if response.status in (401, 403):
+                        raise TautulliAuthError(
+                            f"Tautulli rejected the API key (HTTP {response.status})"
+                        )
+                    if response.status != 200:
                         raise TautulliConnectionError(
                             f"Non-200 status from Tautulli GET {cmd}: {response.status}"
                         )
+                    try:
+                        payload = await response.json()
+                    except (aiohttp.ContentTypeError, ValueError) as json_err:
+                        raise TautulliConnectionError(
+                            f"Invalid JSON from Tautulli for {cmd}: {json_err}"
+                        ) from json_err
+                    return self._validate_payload(payload)
         except TautulliConnectionError:
             raise  # Re-raise our own exceptions
         except TautulliAuthError:
@@ -221,7 +229,7 @@ class TautulliAPI:
         """
         params = {"session_id": session_id, "message": message}
         resp = await self._call_tautulli(
-            "terminate_session", params=params, method="GET"
+            "terminate_session", params=params, method="POST"
         )
         result = resp.get("response", {}).get("result")
         if result != "success":

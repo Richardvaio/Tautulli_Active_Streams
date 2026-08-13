@@ -12,11 +12,8 @@ from .const import (
     CONF_ENABLE_STATISTICS,
     CONF_GEO_PROVIDER,
     CONF_SESSION_INTERVAL,
-    CONF_STATISTICS_DAYS,
     CONF_STATISTICS_INTERVAL,
-    CONF_STATS_MONTH_TO_DATE,
     DEFAULT_SESSION_INTERVAL,
-    DEFAULT_STATISTICS_DAYS,
     DEFAULT_STATISTICS_INTERVAL,
     DOMAIN,
     GEO_PROVIDER_TAUTULLI,
@@ -118,81 +115,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 #  Update Options
 # ---------------------------
 async def async_update_options(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """
-    Triggered when user changes any integration option (like sensor count, stats toggle, or stats days).
-    We'll remove or reload as needed to reflect changes.
-    """
+    """Reload after an options, reauthentication, or reconfiguration update."""
     data = hass.data[DOMAIN].get(entry.entry_id)
     if not data:
         return
 
-    sessions_coordinator = data["sessions_coordinator"]
     history_coordinator = data["history_coordinator"]
-
-    # Stats toggle
     old_stats = history_coordinator.old_stats_toggle
     new_stats = entry.options.get(CONF_ENABLE_STATISTICS, False)
-    history_coordinator.old_stats_toggle = new_stats
+    if old_stats and not new_stats:
+        await async_remove_statistics_sensors(hass, entry)
+        await async_remove_history_button(hass, entry)
 
-    # Day range
-    old_days = history_coordinator.old_stats_days
-    new_days = entry.options.get(CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS)
-    history_coordinator.old_stats_days = new_days
-
-    # Month-to-date
-    old_mtd = getattr(history_coordinator, "old_mtd", False)
-    new_mtd = entry.options.get(CONF_STATS_MONTH_TO_DATE, False)
-    history_coordinator.old_mtd = new_mtd
-
-    reload_needed = False
-
-    if old_stats != new_stats:
-        _LOGGER.debug(
-            "Stats toggled from %s to %s; reload needed", old_stats, new_stats
-        )
-        reload_needed = True
-
-    if old_days != new_days:
-        _LOGGER.debug(
-            "Day range changed from %s to %s; reload needed", old_days, new_days
-        )
-        reload_needed = True
-
-    if old_mtd != new_mtd:
-        _LOGGER.debug(
-            "Month-to-date toggled from %s to %s; reload needed", old_mtd, new_mtd
-        )
-        reload_needed = True
-
-    # If major changes, do a reload.
-    if reload_needed:
-        # If they turned stats off, remove stats sensors & device and the watch-history button
-        if old_stats and not new_stats:
-            await async_remove_statistics_sensors(hass, entry)
-            await async_remove_history_button(hass, entry)
-
-        # Reload so sensor/button code picks up changes or re-adds user sensors
-        await hass.config_entries.async_reload(entry.entry_id)
-
-    else:
-        # No major changes => do partial refresh only
-        new_session_int = entry.options.get(
-            CONF_SESSION_INTERVAL, DEFAULT_SESSION_INTERVAL
-        )
-        new_stats_int = entry.options.get(
-            CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL
-        )
-        sessions_coordinator.update_interval = timedelta(seconds=new_session_int)
-        history_coordinator.update_interval = timedelta(seconds=new_stats_int)
-
-        # Update geo provider if changed (clears cache automatically)
-        geo_cache = data.get("geo_cache")
-        if geo_cache:
-            new_provider = entry.options.get(CONF_GEO_PROVIDER, GEO_PROVIDER_TAUTULLI)
-            geo_cache.provider = new_provider
-
-        await sessions_coordinator.async_request_refresh()
-        await history_coordinator.async_request_refresh()
+    # The config flow updates the entry and lets this listener perform the one
+    # supported reload. This avoids the double-reload race deprecated in
+    # Home Assistant 2026.6 and scheduled to fail in 2026.12.
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 # ---------------------------

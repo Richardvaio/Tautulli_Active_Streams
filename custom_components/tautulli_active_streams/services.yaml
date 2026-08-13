@@ -1,7 +1,14 @@
 kill_all_streams:
   name: Kill All Streams
-  description: Terminate all active Tautulli streams.
+  description: Terminate every active stream on one Tautulli server.
   fields:
+    config_entry_id:
+      name: Tautulli server
+      description: Config entry ID. Required when multiple Tautulli servers are loaded.
+      required: false
+      selector:
+        config_entry:
+          integration: tautulli_active_streams
     message:
       name: Message
       description: The message to send when terminating streams.
@@ -13,13 +20,26 @@ kill_all_streams:
 
 kill_user_streams:
   name: Kill User Streams
-  description: Terminate all streams for a specific user.
+  description: Terminate all streams for a specific Plex user on one Tautulli server.
   fields:
+    config_entry_id:
+      name: Tautulli server
+      description: Config entry ID. Required when multiple Tautulli servers are loaded.
+      required: false
+      selector:
+        config_entry:
+          integration: tautulli_active_streams
+    user_id:
+      name: Plex user ID
+      description: Stable Plex user ID. Preferred over a display name.
+      required: false
+      selector:
+        text:
     user:
       name: User
-      description: The username whose streams should be terminated.
+      description: Display name fallback when the Plex user ID is unavailable.
       example: "john_smith"
-      required: true
+      required: false
       selector:
         text:
     message:
@@ -35,6 +55,13 @@ kill_session_stream:
   name: Kill Session Stream
   description: Terminate a specific stream using its session_id.
   fields:
+    config_entry_id:
+      name: Tautulli server
+      description: Config entry ID. Required when multiple Tautulli servers are loaded.
+      required: false
+      selector:
+        config_entry:
+          integration: tautulli_active_streams
     session_id:
       name: Session ID
       description: The session ID of the stream to terminate.

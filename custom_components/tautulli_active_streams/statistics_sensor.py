@@ -9,6 +9,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import MATCH_ALL
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.typing import StateType
@@ -30,6 +31,8 @@ class TautulliDiagnosticSensor(
     Representation of a Tautulli diagnostic sensor,
     also using the sessions_coordinator to read 'diagnostics'.
     """
+
+    _unrecorded_attributes = frozenset({"sessions"})
 
     def __init__(
         self,
@@ -125,6 +128,10 @@ class TautulliUserStatsSensor(
     One sensor per user, each with '_stats_' in its unique_id,
     referencing history_coordinator.data for user_stats.
     """
+
+    # The duration remains available as entity history. The large derived
+    # attribute set is current-period detail and is not useful in Recorder.
+    _unrecorded_attributes = frozenset({MATCH_ALL})
 
     def __init__(
         self,
@@ -232,7 +239,7 @@ class TautulliUserStatsSensor(
         """Return current data for the stable Plex user ID."""
         if not self.coordinator.data:
             return None
-        for username, stats in self.coordinator.data.get("user_stats", {}).items():
+        for stats in self.coordinator.data.get("user_stats", {}).values():
             if str(stats.get("user_id")) == self._user_id:
-                return username, stats
+                return stats.get("username", "Unknown"), stats
         return None

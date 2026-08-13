@@ -8,6 +8,8 @@ DOMAIN = "tautulli_active_streams"
 DEFAULT_SESSION_INTERVAL = 4
 DEFAULT_STATISTICS_INTERVAL = 1800
 DEFAULT_STATISTICS_DAYS = 30
+DEFAULT_STATISTICS_CYCLE_DAY = 1
+DEFAULT_STATISTICS_PERIOD = "rolling"
 
 # ---------------------------
 # Configuration option keys
@@ -17,6 +19,8 @@ CONF_ENABLE_STATISTICS = "enable_statistics"
 CONF_STATS_MONTH_TO_DATE = "stats_month_to_date"
 CONF_STATISTICS_INTERVAL = "statistics_interval"
 CONF_STATISTICS_DAYS = "statistics_days"
+CONF_STATISTICS_CYCLE_DAY = "statistics_cycle_day"
+CONF_STATISTICS_PERIOD = "statistics_period"
 CONF_ADVANCED_ATTRIBUTES = "advanced_attributes"
 CONF_ENABLE_IP_GEOLOCATION = "enable_ip_geolocation"
 CONF_EXPOSE_DETAILED_LOCATION = "expose_detailed_location"
@@ -26,6 +30,15 @@ MAX_HISTORY_RECORDS = 25000
 
 GEO_PROVIDER_TAUTULLI = "tautulli"
 GEO_PROVIDER_IP_API = "ip-api"
+
+STATISTICS_PERIOD_CALENDAR_MONTH = "calendar_month"
+STATISTICS_PERIOD_CUSTOM_MONTH = "custom_month"
+STATISTICS_PERIOD_ROLLING = "rolling"
+STATISTICS_PERIODS = {
+    STATISTICS_PERIOD_ROLLING: "Rolling period",
+    STATISTICS_PERIOD_CALENDAR_MONTH: "Calendar month",
+    STATISTICS_PERIOD_CUSTOM_MONTH: "Custom monthly cycle",
+}
 
 # ---------------------------
 # Plex configuration keys

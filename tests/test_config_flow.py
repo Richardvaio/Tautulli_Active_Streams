@@ -10,6 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from custom_components.tautulli_active_streams.api import (
+    TautulliAuthError,
+    TautulliConnectionError,
+)
 from custom_components.tautulli_active_streams.config_flow import (
     PlexAuthError,
     PlexConnectionError,
@@ -18,10 +22,6 @@ from custom_components.tautulli_active_streams.config_flow import (
     _normalize_base_url,
     _server_data,
     _server_unique_id,
-)
-from custom_components.tautulli_active_streams.api import (
-    TautulliAuthError,
-    TautulliConnectionError,
 )
 from custom_components.tautulli_active_streams.const import (
     CONF_ADVANCED_ATTRIBUTES,
@@ -34,12 +34,17 @@ from custom_components.tautulli_active_streams.const import (
     CONF_PLEX_TOKEN,
     CONF_PLEX_VERIFY_SSL,
     CONF_SESSION_INTERVAL,
+    CONF_STATISTICS_CYCLE_DAY,
     CONF_STATISTICS_DAYS,
     CONF_STATISTICS_INTERVAL,
+    CONF_STATISTICS_PERIOD,
     CONF_STATS_MONTH_TO_DATE,
     DEFAULT_STATISTICS_DAYS,
     DOMAIN,
     GEO_PROVIDER_IP_API,
+    STATISTICS_PERIOD_CALENDAR_MONTH,
+    STATISTICS_PERIOD_CUSTOM_MONTH,
+    STATISTICS_PERIOD_ROLLING,
 )
 
 SERVER_ID = "plex-server-id"
@@ -47,6 +52,23 @@ TAUTULLI_URL = "http://tautulli:8181"
 PLEX_URL = "http://plex:32400"
 API_KEY = "tautulli-api-key"
 PLEX_TOKEN = "plex-token-value-1234567890"
+
+
+@pytest.fixture(autouse=True)
+def mock_ha_client_session():
+    """Avoid constructing a real DNS resolver in config-flow unit tests."""
+    session = MagicMock(spec=aiohttp.ClientSession)
+    with (
+        patch(
+            "custom_components.tautulli_active_streams.config_flow.async_get_clientsession",
+            return_value=session,
+        ),
+        patch(
+            "custom_components.tautulli_active_streams.options_flow.async_get_clientsession",
+            return_value=session,
+        ),
+    ):
+        yield session
 
 SERVER_RESPONSE = {
     "response": {
@@ -317,8 +339,7 @@ async def test_setup_only_shows_enabled_optional_steps(
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {
-                CONF_STATS_MONTH_TO_DATE: True,
-                CONF_STATISTICS_DAYS: 30,
+                CONF_STATISTICS_PERIOD: STATISTICS_PERIOD_CALENDAR_MONTH,
                 CONF_STATISTICS_INTERVAL: 1800,
             },
         )
@@ -595,6 +616,7 @@ async def test_options_menu_and_legacy_day_normalization(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_STATISTICS_DAYS] == DEFAULT_STATISTICS_DAYS
+    assert result["data"][CONF_STATISTICS_PERIOD] == STATISTICS_PERIOD_ROLLING
 
 
 async def test_options_statistics_and_privacy_are_conditional(
@@ -613,13 +635,14 @@ async def test_options_statistics_and_privacy_are_conditional(
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {
-            CONF_STATS_MONTH_TO_DATE: True,
-            CONF_STATISTICS_DAYS: 45,
+            CONF_STATISTICS_PERIOD: STATISTICS_PERIOD_CALENDAR_MONTH,
             CONF_STATISTICS_INTERVAL: 3600,
         },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_ENABLE_STATISTICS] is True
+    assert result["data"][CONF_STATISTICS_PERIOD] == STATISTICS_PERIOD_CALENDAR_MONTH
+    assert result["data"][CONF_STATS_MONTH_TO_DATE] is True
 
     entry = _entry(hass, unique_id="privacy-entry")
     hass.config_entries.async_update_entry(
@@ -639,6 +662,79 @@ async def test_options_statistics_and_privacy_are_conditional(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_EXPOSE_DETAILED_LOCATION] is False
+
+
+@pytest.mark.parametrize(
+    ("period", "range_data", "range_key", "expected"),
+    [
+        (
+            STATISTICS_PERIOD_ROLLING,
+            {CONF_STATISTICS_DAYS: 45},
+            CONF_STATISTICS_DAYS,
+            45,
+        ),
+        (
+            STATISTICS_PERIOD_CUSTOM_MONTH,
+            {CONF_STATISTICS_CYCLE_DAY: 31},
+            CONF_STATISTICS_CYCLE_DAY,
+            31,
+        ),
+    ],
+)
+async def test_options_statistics_only_asks_for_relevant_range(
+    hass: HomeAssistant,
+    period: str,
+    range_data: dict,
+    range_key: str,
+    expected: int,
+) -> None:
+    """Test rolling and custom cycles use a focused second form."""
+    entry = _entry(hass, unique_id=f"period-{period}")
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "statistics"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_ENABLE_STATISTICS: True}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_STATISTICS_PERIOD: period,
+            CONF_STATISTICS_INTERVAL: 1800,
+        },
+    )
+    assert result["step_id"] == "statistics_range"
+    schema_keys = {key.schema for key in result["data_schema"].schema}
+    assert schema_keys == {range_key}
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], range_data
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_STATISTICS_PERIOD] == period
+    assert result["data"][range_key] == expected
+    assert result["data"][CONF_STATS_MONTH_TO_DATE] is False
+
+
+async def test_legacy_month_to_date_migrates_without_changing_behavior(
+    hass: HomeAssistant,
+) -> None:
+    """Test the old month toggle maps to the calendar-month period."""
+    entry = _entry(hass, unique_id="legacy-month")
+    options = {**entry.options, CONF_STATS_MONTH_TO_DATE: True}
+    options.pop(CONF_STATISTICS_PERIOD, None)
+    hass.config_entries.async_update_entry(entry, options=options)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "general"}
+    )
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_SESSION_INTERVAL: 4, CONF_ADVANCED_ATTRIBUTES: False},
+    )
+    assert result["data"][CONF_STATISTICS_PERIOD] == STATISTICS_PERIOD_CALENDAR_MONTH
 
 
 async def test_options_disable_statistics_and_enable_privacy(

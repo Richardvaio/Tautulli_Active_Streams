@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import time
 from datetime import datetime, timedelta
@@ -15,10 +16,17 @@ from .api import TautulliAPI, TautulliAuthError
 from .const import (
     CONF_ENABLE_IP_GEOLOCATION,
     CONF_ENABLE_STATISTICS,
+    CONF_STATISTICS_CYCLE_DAY,
     CONF_STATISTICS_DAYS,
+    CONF_STATISTICS_PERIOD,
     CONF_STATS_MONTH_TO_DATE,
+    DEFAULT_STATISTICS_CYCLE_DAY,
     DEFAULT_STATISTICS_DAYS,
+    DEFAULT_STATISTICS_PERIOD,
     MAX_HISTORY_RECORDS,
+    STATISTICS_PERIOD_CALENDAR_MONTH,
+    STATISTICS_PERIOD_CUSTOM_MONTH,
+    STATISTICS_PERIOD_ROLLING,
     format_seconds_to_min_sec,
     is_private_ip,
 )
@@ -27,6 +35,77 @@ if TYPE_CHECKING:
     from .geo import IPGeoCache
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    """Normalize Tautulli integer fields, which may arrive as strings."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Normalize Tautulli decimal fields, including empty strings and nulls."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def statistics_period(options: dict[str, Any]) -> str:
+    """Return the configured period, migrating the legacy month toggle."""
+    period = options.get(CONF_STATISTICS_PERIOD)
+    if period in {
+        STATISTICS_PERIOD_ROLLING,
+        STATISTICS_PERIOD_CALENDAR_MONTH,
+        STATISTICS_PERIOD_CUSTOM_MONTH,
+    }:
+        return period
+    if options.get(CONF_STATS_MONTH_TO_DATE, False):
+        return STATISTICS_PERIOD_CALENDAR_MONTH
+    return DEFAULT_STATISTICS_PERIOD
+
+
+def statistics_start(now: datetime, options: dict[str, Any]) -> datetime:
+    """Calculate the inclusive local start of the selected statistics period."""
+    period = statistics_period(options)
+    if period == STATISTICS_PERIOD_ROLLING:
+        days = max(1, _as_int(options.get(CONF_STATISTICS_DAYS), DEFAULT_STATISTICS_DAYS))
+        return now - timedelta(days=days)
+
+    if period == STATISTICS_PERIOD_CALENDAR_MONTH:
+        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    cycle_day = min(
+        31,
+        max(
+            1,
+            _as_int(
+                options.get(CONF_STATISTICS_CYCLE_DAY),
+                DEFAULT_STATISTICS_CYCLE_DAY,
+            ),
+        ),
+    )
+    year = now.year
+    month = now.month
+    current_day = min(cycle_day, calendar.monthrange(year, month)[1])
+    if now.day < current_day:
+        if month == 1:
+            year -= 1
+            month = 12
+        else:
+            month -= 1
+    start_day = min(cycle_day, calendar.monthrange(year, month)[1])
+    return now.replace(
+        year=year,
+        month=month,
+        day=start_day,
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
 
 
 class TautulliSessionsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -172,43 +251,23 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api = api
         self._geo_cache = geo_cache
 
-        # store the old stats days so we can detect day-range changes later
-        self.old_stats_days = config_entry.options.get(
-            CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS
-        )
-
         # store old stats toggle
         self.old_stats_toggle = config_entry.options.get(CONF_ENABLE_STATISTICS, False)
 
-        # store Month to date toggle
-        self.old_mtd = config_entry.options.get(CONF_STATS_MONTH_TO_DATE, False)
-
     async def _async_update_data(self) -> dict[str, Any]:
-        """If stats are on, fetch watch history based on either day-range or month-to-date."""
+        """Fetch and aggregate history for the selected statistics period."""
         data = {}
 
         # Check if user enabled statistics
         if self.config_entry.options.get(CONF_ENABLE_STATISTICS, False):
-            use_mtd = self.config_entry.options.get(CONF_STATS_MONTH_TO_DATE, False)
-            if use_mtd:
-                # Start from 1st of month in local HA timezone
-                after_date = ha_now().replace(
-                    day=1, hour=0, minute=0, second=0, microsecond=0
-                )
-
-            else:
-                # Default to X days ago in local HA timezone
-                after_date = ha_now() - timedelta(
-                    days=self.config_entry.options.get(
-                        CONF_STATISTICS_DAYS, DEFAULT_STATISTICS_DAYS
-                    )
-                )
+            after_date = statistics_start(ha_now(), dict(self.config_entry.options))
 
             after_str = after_date.strftime("%Y-%m-%d")
 
             try:
                 hist_resp = await self.api.get_history(
                     after=after_str,
+                    grouping=0,
                     order_column="date",
                     order_dir="desc",
                     length=MAX_HISTORY_RECORDS,
@@ -243,8 +302,15 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         records = hist_resp.get("data", [])
         for item in records:
             user = item.get("user", "Unknown")
-            if user not in user_stats:
-                user_stats[user] = {
+            upstream_user_id = item.get("user_id")
+            user_key = (
+                str(upstream_user_id)
+                if upstream_user_id is not None
+                else f"name:{user}"
+            )
+            if user_key not in user_stats:
+                user_stats[user_key] = {
+                    "username": user,
                     "user_id": item.get("user_id"),
                     "total_plays": 0,
                     "total_play_duration_sec": 0,
@@ -276,6 +342,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "last_ip": None,
                     "last_started_ts": 0,
                     "last_stopped_ts": 0,
+                    "last_username_ts": 0,
                     # store location
                     "geo_city": None,
                     "geo_region": None,
@@ -289,7 +356,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "geo_accuracy": None,
                 }
 
-            stats = user_stats[user]
+            stats = user_stats[user_key]
 
             # Plex user IDs are stable when a display name changes. Keep the
             # upstream ID with the aggregated data so config-entry entities can
@@ -299,14 +366,17 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # read IP address if available
             ip_addr = item.get("ip_address")
-            started_ts = item.get("started", 0)
+            started_ts = _as_int(item.get("started"))
+            if started_ts >= stats["last_username_ts"]:
+                stats["username"] = user
+                stats["last_username_ts"] = started_ts
             # if this record is more recent than our stored "last_started_ts", update last_ip
             if ip_addr and started_ts and started_ts > stats["last_started_ts"]:
                 stats["last_ip"] = ip_addr
                 stats["last_started_ts"] = started_ts
 
             # Pause logic: if paused_counter > 0, increment paused_count
-            paused_seconds = item.get("paused_counter", 0)
+            paused_seconds = _as_int(item.get("paused_counter"))
             if paused_seconds > 0:
                 stats["paused_count"] += 1
             stats["paused_duration_sec"] += paused_seconds
@@ -321,7 +391,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
                 # If this record's started_ts is newer, update last_transcode_ts
-                started_ts = item.get("started", 0)
+                started_ts = _as_int(item.get("started"))
                 if started_ts and started_ts > stats["last_transcode_ts"]:
                     stats["last_transcode_ts"] = started_ts
 
@@ -335,9 +405,9 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             elif media_type == "episode":
                 stats["tv_plays"] += 1
 
-            duration_sec = item.get("duration", 0)
+            duration_sec = _as_int(item.get("duration"))
             stats["total_play_duration_sec"] += duration_sec
-            stats["completion_sum"] += float(item.get("watched_status", 0))
+            stats["completion_sum"] += _as_float(item.get("watched_status"))
 
             # If direct play/stream vs. transcode
             if "transcode" in transcode_decision:
@@ -361,7 +431,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
 
             # Start time analysis
-            started_ts = item.get("started", 0)
+            started_ts = _as_int(item.get("started"))
             if started_ts:
                 stats["play_start_times"].append(started_ts)
                 dt_obj = datetime.fromtimestamp(started_ts, tz=ha_now().tzinfo)
@@ -398,12 +468,12 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
             # track 'stopped' to find last_stopped_ts
-            stopped_ts = item.get("stopped", 0)
+            stopped_ts = _as_int(item.get("stopped"))
             if stopped_ts and stopped_ts > stats["last_stopped_ts"]:
                 stats["last_stopped_ts"] = stopped_ts
 
         # Final calculations for each user
-        for user, stats in user_stats.items():
+        for stats in user_stats.values():
             total_plays = stats["total_plays"] or 1
 
             # transcode devices

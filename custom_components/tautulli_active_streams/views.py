@@ -15,6 +15,15 @@ _VALID_IMG_PATTERN = re.compile(r"^/[\w/.-]+$")
 _MIN_IMAGE_SIZE = 16
 _MAX_IMAGE_SIZE = 2000
 _MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_ALLOWED_FALLBACKS = {
+    "art",
+    "art-live",
+    "art-live-full",
+    "cover",
+    "poster",
+    "poster-live",
+    "user",
+}
 
 
 def _image_dimension(value: str) -> int | None:
@@ -56,6 +65,10 @@ class TautulliImageView(HomeAssistantView):
                 status=400,
                 text=f"Image dimensions must be between {_MIN_IMAGE_SIZE} and {_MAX_IMAGE_SIZE}",
             )
+        if fallback not in _ALLOWED_FALLBACKS:
+            return web.Response(status=400, text="Invalid fallback parameter")
+        if refresh not in {"true", "false"}:
+            return web.Response(status=400, text="Invalid refresh parameter")
 
         # Sanitize img parameter — must look like a Plex media path
         if not _VALID_IMG_PATTERN.match(img):

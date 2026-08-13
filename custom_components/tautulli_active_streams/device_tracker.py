@@ -53,7 +53,7 @@ def _user_stats_by_id(coordinator) -> dict[str, tuple[str, dict[str, Any]]]:
         return {}
 
     users: dict[str, tuple[str, dict[str, Any]]] = {}
-    for username, stats in coordinator.data.get("user_stats", {}).items():
+    for stats in coordinator.data.get("user_stats", {}).values():
         user_id = stats.get("user_id")
         if user_id is None:
             continue
@@ -63,7 +63,7 @@ def _user_stats_by_id(coordinator) -> dict[str, tuple[str, dict[str, Any]]]:
         if existing is None or stats.get("last_started_ts", 0) > existing[1].get(
             "last_started_ts", 0
         ):
-            users[key] = (username, stats)
+            users[key] = (stats.get("username", "Unknown"), stats)
     return users
 
 

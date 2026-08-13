@@ -11,7 +11,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import STATE_OFF
+from homeassistant.const import MATCH_ALL, STATE_OFF
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.typing import StateType
@@ -20,6 +20,8 @@ from homeassistant.util.dt import now as ha_now
 
 from .const import (
     CONF_ADVANCED_ATTRIBUTES,
+    CONF_ENABLE_IP_GEOLOCATION,
+    CONF_EXPOSE_DETAILED_LOCATION,
     DOMAIN,
     format_seconds_to_min_sec,
 )
@@ -36,6 +38,10 @@ class TautulliStreamSensor(
     Representation of a Tautulli stream sensor,
     reading from the sessions_coordinator for session data.
     """
+
+    # Stream metadata changes frequently and can be very large. Keep the state
+    # history (playing/paused/off) without duplicating attributes in Recorder.
+    _unrecorded_attributes = frozenset({MATCH_ALL})
 
     def __init__(
         self,
@@ -184,6 +190,14 @@ class TautulliStreamSensor(
         if not rating_key:
             return
 
+        # A dynamic slot can be reassigned to another session. Clear metadata
+        # before fetching a different item so details from the previous rating
+        # key can never be rendered against the new stream.
+        if rating_key != self._last_rating_key:
+            self._plex_metadata = {}
+            self._credits_offset_ms = None
+            self._in_credits = False
+
         try:
             http_session = async_get_clientsession(self.hass)
             credits_offset, metadata, status = await async_fetch_plex_metadata(
@@ -301,7 +315,7 @@ class TautulliStreamSensor(
                     "width": width,
                     "height": height,
                     "fallback": fallback,
-                    "refresh": "true",
+                    "refresh": "false",
                 }
             )
             signed_urls[key] = async_sign_path(
@@ -365,12 +379,6 @@ class TautulliStreamSensor(
         attributes["device"] = session.get("device")
         attributes["platform"] = session.get("platform")
         attributes["location"] = session.get("location")
-        attributes["ip_address"] = session.get("ip_address")
-        attributes["ip_address_public"] = session.get("ip_address_public")
-        attributes["geo_city"] = session.get("geo_city")
-        attributes["geo_region"] = session.get("geo_region")
-        attributes["geo_country"] = session.get("geo_country")
-        attributes["geo_code"] = session.get("geo_code")
         attributes["local"] = session.get("local")
         attributes["relayed"] = session.get("relayed")
         attributes["bandwidth"] = session.get("bandwidth")
@@ -390,6 +398,22 @@ class TautulliStreamSensor(
             "stream_audio_channel_layout"
         )
         attributes["stream_audio_bitrate"] = session.get("stream_audio_bitrate")
+
+        # Coarse geolocation is only exposed when the user explicitly enables
+        # geolocation. Raw public IPs, coordinates and postal codes require the
+        # separate detailed-location opt-in below.
+        if self._entry.options.get(CONF_ENABLE_IP_GEOLOCATION, False):
+            attributes["geo_city"] = session.get("geo_city")
+            attributes["geo_region"] = session.get("geo_region")
+            attributes["geo_country"] = session.get("geo_country")
+            attributes["geo_code"] = session.get("geo_code")
+
+        if self._entry.options.get(CONF_EXPOSE_DETAILED_LOCATION, False):
+            attributes["ip_address"] = session.get("ip_address")
+            attributes["ip_address_public"] = session.get("ip_address_public")
+            attributes["geo_latitude"] = session.get("geo_latitude")
+            attributes["geo_longitude"] = session.get("geo_longitude")
+            attributes["geo_postal_code"] = session.get("geo_postal_code")
 
         # Stream timing — always available so Lovelace cards work without advanced mode
         attributes["stream_start_time"] = session.get("start_time")
@@ -632,7 +656,7 @@ class TautulliStreamSensor(
 
             # Library file path (from Plex XML Parts)
             library_folder = session.get("library_folder")
-            if library_folder:
+            if library_folder and advanced:
                 attributes["library_folder"] = library_folder
 
             # Library section info (from Plex XML)

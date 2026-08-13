@@ -22,23 +22,41 @@ from .const import (
     CONF_PLEX_TOKEN,
     CONF_PLEX_VERIFY_SSL,
     CONF_SESSION_INTERVAL,
+    CONF_STATISTICS_CYCLE_DAY,
     CONF_STATISTICS_DAYS,
     CONF_STATISTICS_INTERVAL,
+    CONF_STATISTICS_PERIOD,
     CONF_STATS_MONTH_TO_DATE,
     DEFAULT_SESSION_INTERVAL,
+    DEFAULT_STATISTICS_CYCLE_DAY,
     DEFAULT_STATISTICS_DAYS,
     DEFAULT_STATISTICS_INTERVAL,
+    DEFAULT_STATISTICS_PERIOD,
     DOMAIN,
     GEO_PROVIDER_IP_API,
     GEO_PROVIDER_TAUTULLI,
+    STATISTICS_PERIOD_CALENDAR_MONTH,
+    STATISTICS_PERIOD_CUSTOM_MONTH,
+    STATISTICS_PERIOD_ROLLING,
+    STATISTICS_PERIODS,
 )
 from .flow_helpers import (
     PlexAuthError,
     PlexConnectionError,
+)
+from .flow_helpers import (
     async_validate_plex as _async_validate_plex,
+)
+from .flow_helpers import (
     normalize_base_url as _normalize_base_url,
+)
+from .flow_helpers import (
     password_selector as _password_selector,
+)
+from .flow_helpers import (
     server_data as _server_data,
+)
+from .flow_helpers import (
     server_unique_id as _server_unique_id,
 )
 from .options_flow import TautulliOptionsFlowHandler
@@ -136,6 +154,8 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_GEO_PROVIDER: GEO_PROVIDER_TAUTULLI,
                     CONF_EXPOSE_DETAILED_LOCATION: False,
                     CONF_STATS_MONTH_TO_DATE: False,
+                    CONF_STATISTICS_PERIOD: DEFAULT_STATISTICS_PERIOD,
+                    CONF_STATISTICS_CYCLE_DAY: DEFAULT_STATISTICS_CYCLE_DAY,
                     CONF_STATISTICS_DAYS: DEFAULT_STATISTICS_DAYS,
                     CONF_STATISTICS_INTERVAL: DEFAULT_STATISTICS_INTERVAL,
                 }
@@ -179,18 +199,26 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_statistics(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        """Configure optional watch-history statistics."""
+        """Choose the watch-history statistics period."""
         if user_input is not None:
             self._flow_data.update(user_input)
+            period = user_input[CONF_STATISTICS_PERIOD]
+            self._flow_data[CONF_STATS_MONTH_TO_DATE] = (
+                period == STATISTICS_PERIOD_CALENDAR_MONTH
+            )
+            if period in {
+                STATISTICS_PERIOD_ROLLING,
+                STATISTICS_PERIOD_CUSTOM_MONTH,
+            }:
+                return await self.async_step_statistics_range()
             return await self._async_next_setup_step(after="statistics")
 
         schema = vol.Schema(
             {
-                vol.Optional(CONF_STATS_MONTH_TO_DATE, default=False): bool,
-                vol.Optional(
-                    CONF_STATISTICS_DAYS,
-                    default=DEFAULT_STATISTICS_DAYS,
-                ): vol.All(int, vol.Range(min=1)),
+                vol.Required(
+                    CONF_STATISTICS_PERIOD,
+                    default=DEFAULT_STATISTICS_PERIOD,
+                ): vol.In(STATISTICS_PERIODS),
                 vol.Optional(
                     CONF_STATISTICS_INTERVAL,
                     default=DEFAULT_STATISTICS_INTERVAL,
@@ -198,6 +226,35 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="statistics", data_schema=schema)
+
+    async def async_step_statistics_range(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Collect the setting required by the selected statistics period."""
+        if user_input is not None:
+            self._flow_data.update(user_input)
+            return await self._async_next_setup_step(after="statistics")
+
+        period = self._flow_data[CONF_STATISTICS_PERIOD]
+        if period == STATISTICS_PERIOD_ROLLING:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_STATISTICS_DAYS,
+                        default=DEFAULT_STATISTICS_DAYS,
+                    ): vol.All(int, vol.Range(min=1, max=365))
+                }
+            )
+        else:
+            schema = vol.Schema(
+                {
+                    vol.Required(
+                        CONF_STATISTICS_CYCLE_DAY,
+                        default=DEFAULT_STATISTICS_CYCLE_DAY,
+                    ): vol.All(int, vol.Range(min=1, max=31))
+                }
+            )
+        return self.async_show_form(step_id="statistics_range", data_schema=schema)
 
     async def _async_next_setup_step(
         self, after: str
@@ -293,10 +350,11 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id(_server_unique_id(response, url))
                 self._abort_if_unique_id_mismatch(reason="wrong_server")
-                return self.async_update_reload_and_abort(
+                self.hass.config_entries.async_update_entry(
                     entry,
-                    data_updates={CONF_API_KEY: api_key},
+                    data={**entry.data, CONF_API_KEY: api_key},
                 )
+                return self.async_abort(reason="reauth_successful")
 
         schema = vol.Schema(
             {vol.Required(CONF_API_KEY): _password_selector("new-password")}
@@ -337,15 +395,17 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data = _server_data(response)
                     server_name = user_input.get(CONF_SERVER_NAME, "").strip()
                     server_name = server_name or data.get("pms_name") or entry.title
-                    return self.async_update_reload_and_abort(
+                    self.hass.config_entries.async_update_entry(
                         entry,
                         title=server_name,
-                        data_updates={
+                        data={
+                            **entry.data,
                             CONF_SERVER_NAME: server_name,
                             CONF_URL: url,
                             CONF_VERIFY_SSL: verify_ssl,
                         },
                     )
+                    return self.async_abort(reason="reconfigure_successful")
 
         schema = vol.Schema(
             {
@@ -400,6 +460,10 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ADVANCED_ATTRIBUTES: self._flow_data[CONF_ADVANCED_ATTRIBUTES],
             CONF_ENABLE_STATISTICS: self._flow_data[CONF_ENABLE_STATISTICS],
             CONF_STATS_MONTH_TO_DATE: self._flow_data[CONF_STATS_MONTH_TO_DATE],
+            CONF_STATISTICS_PERIOD: self._flow_data[CONF_STATISTICS_PERIOD],
+            CONF_STATISTICS_CYCLE_DAY: self._flow_data[
+                CONF_STATISTICS_CYCLE_DAY
+            ],
             CONF_STATISTICS_INTERVAL: self._flow_data[CONF_STATISTICS_INTERVAL],
             CONF_STATISTICS_DAYS: self._flow_data[CONF_STATISTICS_DAYS],
             CONF_PLEX_ENABLED: self._flow_data[CONF_PLEX_ENABLED],
