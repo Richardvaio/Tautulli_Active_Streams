@@ -12,7 +12,7 @@
         },
         "data_description": {
           "server_name": "Leave blank to use the Plex server name reported by Tautulli.",
-          "url": "For example, http://192.168.1.10:8181 or https://tautulli.example.com.",
+          "url": "Enter the address that Home Assistant uses to reach Tautulli.",
           "verify_ssl": "Disable only when Tautulli uses a trusted private network and a self-signed certificate."
         }
       },
