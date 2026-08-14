@@ -71,7 +71,9 @@ def statistics_start(now: datetime, options: dict[str, Any]) -> datetime:
     """Calculate the inclusive local start of the selected statistics period."""
     period = statistics_period(options)
     if period == STATISTICS_PERIOD_ROLLING:
-        days = max(1, _as_int(options.get(CONF_STATISTICS_DAYS), DEFAULT_STATISTICS_DAYS))
+        days = max(
+            1, _as_int(options.get(CONF_STATISTICS_DAYS), DEFAULT_STATISTICS_DAYS)
+        )
         return now - timedelta(days=days)
 
     if period == STATISTICS_PERIOD_CALENDAR_MONTH:

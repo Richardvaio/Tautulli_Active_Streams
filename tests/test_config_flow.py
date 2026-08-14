@@ -25,6 +25,10 @@ from custom_components.tautulli_active_streams.config_flow import (
 )
 from custom_components.tautulli_active_streams.const import (
     CONF_ADVANCED_ATTRIBUTES,
+    CONF_CARD_ALLOW_HISTORY,
+    CONF_CARD_ALLOW_TERMINATION,
+    CONF_CARD_SHOW_CLIENT_DETAILS,
+    CONF_CARD_SHOW_USER_NAMES,
     CONF_ENABLE_IP_GEOLOCATION,
     CONF_ENABLE_STATISTICS,
     CONF_EXPOSE_DETAILED_LOCATION,
@@ -69,6 +73,7 @@ def mock_ha_client_session():
         ),
     ):
         yield session
+
 
 SERVER_RESPONSE = {
     "response": {
@@ -603,6 +608,7 @@ async def test_options_menu_and_legacy_day_normalization(
         "general",
         "statistics",
         "privacy",
+        "dashboard",
         "plex",
     ]
 
@@ -662,6 +668,31 @@ async def test_options_statistics_and_privacy_are_conditional(
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_EXPOSE_DETAILED_LOCATION] is False
+
+
+async def test_options_dashboard_access_controls_are_saved(
+    hass: HomeAssistant,
+) -> None:
+    """Test card privacy and destructive permissions are explicit options."""
+    entry = _entry(hass, unique_id="dashboard-options")
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "dashboard"}
+    )
+    assert result["step_id"] == "dashboard"
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            CONF_CARD_SHOW_USER_NAMES: False,
+            CONF_CARD_SHOW_CLIENT_DETAILS: False,
+            CONF_CARD_ALLOW_HISTORY: False,
+            CONF_CARD_ALLOW_TERMINATION: True,
+        },
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CARD_SHOW_USER_NAMES] is False
+    assert result["data"][CONF_CARD_ALLOW_HISTORY] is False
+    assert result["data"][CONF_CARD_ALLOW_TERMINATION] is True
 
 
 @pytest.mark.parametrize(

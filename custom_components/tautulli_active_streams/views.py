@@ -6,6 +6,7 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
 
 from .const import DOMAIN
+from .image import ImagePathCache
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class TautulliImageView(HomeAssistantView):
 
         entry_id = request.query.get("entry_id")
         img = request.query.get("img")
+        token = request.query.get("token")
         width = _image_dimension(request.query.get("width", "300"))
         height = _image_dimension(request.query.get("height", "450"))
         fallback = request.query.get("fallback", "poster")
@@ -58,8 +60,6 @@ class TautulliImageView(HomeAssistantView):
         # Validate required parameters
         if not entry_id:
             return web.Response(status=400, text="Missing entry_id parameter")
-        if not img:
-            return web.Response(status=400, text="Missing img parameter")
         if width is None or height is None:
             return web.Response(
                 status=400,
@@ -70,14 +70,6 @@ class TautulliImageView(HomeAssistantView):
         if refresh not in {"true", "false"}:
             return web.Response(status=400, text="Invalid refresh parameter")
 
-        # Sanitize img parameter — must look like a Plex media path
-        if not _VALID_IMG_PATTERN.match(img):
-            return web.Response(status=400, text="Invalid img parameter")
-
-        # Reject path traversal attempts
-        if ".." in img:
-            return web.Response(status=400, text="Invalid img parameter")
-
         # Look up the stored data for this entry_id
         all_entries = hass.data.get(DOMAIN, {})
         my_entry_dict = all_entries.get(entry_id)
@@ -85,6 +77,20 @@ class TautulliImageView(HomeAssistantView):
         if not my_entry_dict:
             _LOGGER.error("No data found for Tautulli entry_id: %s", entry_id)
             return web.Response(status=404, text="No matching Tautulli entry_id found")
+
+        if token:
+            image_cache = my_entry_dict.get("image_cache")
+            if not isinstance(image_cache, ImagePathCache):
+                return web.Response(status=404, text="Image token is not available")
+            img = image_cache.resolve(token)
+            if img is None:
+                return web.Response(status=404, text="Image token is not available")
+        elif not img:
+            return web.Response(status=400, text="Missing image parameter")
+
+        # Sanitize the resolved image path before forwarding it upstream.
+        if not _VALID_IMG_PATTERN.match(img) or ".." in img:
+            return web.Response(status=400, text="Invalid image parameter")
 
         # Extract the TautulliAPI object
         api_obj = my_entry_dict.get("api")
@@ -118,6 +124,7 @@ class TautulliImageView(HomeAssistantView):
                 tautulli_image_url,
                 params=params,
                 timeout=aiohttp.ClientTimeout(total=10),
+                ssl=api_obj.verify_ssl,
             ) as response:
                 if response.status != 200:
                     _LOGGER.error(

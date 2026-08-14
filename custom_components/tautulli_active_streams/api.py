@@ -14,6 +14,10 @@ class TautulliAuthError(Exception):
     """Raised when Tautulli returns an auth failure (bad API key)."""
 
 
+class TautulliAPIError(TautulliConnectionError):
+    """Raised when Tautulli returns a command-level error envelope."""
+
+
 class TautulliAPI:
     """Handles communication with the Tautulli API."""
 
@@ -51,6 +55,11 @@ class TautulliAPI:
         return self._session
 
     @property
+    def verify_ssl(self) -> bool:
+        """Return whether upstream TLS certificates are verified."""
+        return self._verify_ssl
+
+    @property
     def _safe_base_url(self) -> str:
         """Return the base URL without the API key for safe logging."""
         return f"{self._base_url}?apikey=[REDACTED]&cmd="
@@ -65,7 +74,7 @@ class TautulliAPI:
         lowered = message.lower()
         if "api key" in lowered or "apikey" in lowered or "unauthorized" in lowered:
             raise TautulliAuthError(message)
-        return payload
+        raise TautulliAPIError(message)
 
     async def _call_tautulli(self, cmd, params=None, method="GET"):
         """
@@ -202,6 +211,63 @@ class TautulliAPI:
         if not resp:
             return {}
         return resp.get("response", {}).get("data", {})
+
+    async def get_recently_added(
+        self,
+        *,
+        start: int = 0,
+        count: int = 20,
+        media_type: str | None = None,
+        section_id: str | None = None,
+    ) -> dict:
+        """Return a bounded page from the Plex dashboard's recent media."""
+        params = {"start": max(0, start), "count": min(50, max(1, count))}
+        if media_type:
+            params["media_type"] = media_type
+        if section_id:
+            params["section_id"] = section_id
+        resp = await self._call_tautulli("get_recently_added", params=params)
+        return resp.get("response", {}).get("data", {}) if resp else {}
+
+    async def get_home_stats(
+        self,
+        *,
+        stat_id: str,
+        time_range: int = 30,
+        stats_type: str = "plays",
+        start: int = 0,
+        count: int = 10,
+        section_id: str | None = None,
+        user_id: str | None = None,
+    ) -> dict | list[dict]:
+        """Return one bounded Tautulli home-stat collection."""
+        params = {
+            "stat_id": stat_id,
+            "time_range": min(3650, max(1, time_range)),
+            "stats_type": stats_type,
+            "stats_start": max(0, start),
+            "stats_count": min(50, max(1, count)),
+            "grouping": 1,
+        }
+        if section_id:
+            params["section_id"] = section_id
+        if user_id:
+            params["user_id"] = user_id
+        resp = await self._call_tautulli("get_home_stats", params=params)
+        data = resp.get("response", {}).get("data", {}) if resp else {}
+        return data if isinstance(data, (dict, list)) else {}
+
+    async def get_user_names(self) -> list[dict]:
+        """Return the minimal stable user selector data."""
+        resp = await self._call_tautulli("get_user_names")
+        data = resp.get("response", {}).get("data", []) if resp else []
+        return data if isinstance(data, list) else []
+
+    async def get_library_names(self) -> list[dict]:
+        """Return the minimal library selector data."""
+        resp = await self._call_tautulli("get_library_names")
+        data = resp.get("response", {}).get("data", []) if resp else []
+        return data if isinstance(data, list) else []
 
     async def get_geoip_lookup(self, ip_address: str) -> dict:
         """

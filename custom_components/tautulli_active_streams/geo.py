@@ -88,7 +88,7 @@ class IPGeoCache:
             )
             return {}
 
-        # Map ip-api.com fields â†’ Tautulli-compatible field names
+        # Map ip-api.com fields to Tautulli-compatible field names.
         return {
             "city": data.get("city"),
             "code": data.get("countryCode"),

@@ -8,6 +8,10 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     CONF_ADVANCED_ATTRIBUTES,
+    CONF_CARD_ALLOW_HISTORY,
+    CONF_CARD_ALLOW_TERMINATION,
+    CONF_CARD_SHOW_CLIENT_DETAILS,
+    CONF_CARD_SHOW_USER_NAMES,
     CONF_ENABLE_IP_GEOLOCATION,
     CONF_ENABLE_STATISTICS,
     CONF_EXPOSE_DETAILED_LOCATION,
@@ -60,9 +64,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
                 if self.options.get(CONF_STATS_MONTH_TO_DATE, False)
                 else DEFAULT_STATISTICS_PERIOD
             )
-        self.options.setdefault(
-            CONF_STATISTICS_CYCLE_DAY, DEFAULT_STATISTICS_CYCLE_DAY
-        )
+        self.options.setdefault(CONF_STATISTICS_CYCLE_DAY, DEFAULT_STATISTICS_CYCLE_DAY)
         self._plex_enabled_old = bool(
             config_entry.data.get(
                 CONF_PLEX_ENABLED,
@@ -76,7 +78,7 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
         """Show a concise menu of option groups."""
         return self.async_show_menu(
             step_id="init",
-            menu_options=["general", "statistics", "privacy", "plex"],
+            menu_options=["general", "statistics", "privacy", "dashboard", "plex"],
         )
 
     async def async_step_general(
@@ -236,6 +238,36 @@ class TautulliOptionsFlowHandler(config_entries.OptionsFlow):
             }
         )
         return self.async_show_form(step_id="privacy_details", data_schema=schema)
+
+    async def async_step_dashboard(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Configure server-enforced dashboard-card privacy and actions."""
+        if user_input is not None:
+            self.options.update(user_input)
+            return self._finish()
+
+        schema = vol.Schema(
+            {
+                vol.Optional(
+                    CONF_CARD_SHOW_USER_NAMES,
+                    default=self.options.get(CONF_CARD_SHOW_USER_NAMES, True),
+                ): bool,
+                vol.Optional(
+                    CONF_CARD_SHOW_CLIENT_DETAILS,
+                    default=self.options.get(CONF_CARD_SHOW_CLIENT_DETAILS, True),
+                ): bool,
+                vol.Optional(
+                    CONF_CARD_ALLOW_HISTORY,
+                    default=self.options.get(CONF_CARD_ALLOW_HISTORY, True),
+                ): bool,
+                vol.Optional(
+                    CONF_CARD_ALLOW_TERMINATION,
+                    default=self.options.get(CONF_CARD_ALLOW_TERMINATION, False),
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="dashboard", data_schema=schema)
 
     async def async_step_plex(
         self, user_input: dict[str, Any] | None = None

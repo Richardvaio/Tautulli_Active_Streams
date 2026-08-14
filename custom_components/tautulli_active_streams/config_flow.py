@@ -461,9 +461,7 @@ class TautulliConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ENABLE_STATISTICS: self._flow_data[CONF_ENABLE_STATISTICS],
             CONF_STATS_MONTH_TO_DATE: self._flow_data[CONF_STATS_MONTH_TO_DATE],
             CONF_STATISTICS_PERIOD: self._flow_data[CONF_STATISTICS_PERIOD],
-            CONF_STATISTICS_CYCLE_DAY: self._flow_data[
-                CONF_STATISTICS_CYCLE_DAY
-            ],
+            CONF_STATISTICS_CYCLE_DAY: self._flow_data[CONF_STATISTICS_CYCLE_DAY],
             CONF_STATISTICS_INTERVAL: self._flow_data[CONF_STATISTICS_INTERVAL],
             CONF_STATISTICS_DAYS: self._flow_data[CONF_STATISTICS_DAYS],
             CONF_PLEX_ENABLED: self._flow_data[CONF_PLEX_ENABLED],

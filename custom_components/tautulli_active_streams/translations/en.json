@@ -120,6 +120,7 @@
           "general": "General",
           "statistics": "Watch-history statistics",
           "privacy": "Location and privacy",
+          "dashboard": "Dashboard card access",
           "plex": "Plex metadata enrichment"
         }
       },
@@ -179,6 +180,16 @@
         "data_description": {
           "geo_provider": "Tautulli uses its local GeoLite2 database. ip-api.com sends public IP addresses to an external service.",
           "expose_detailed_location": "Adds public IP address, postal code and coordinates to Home Assistant attributes and recorder history."
+        }
+      },
+      "dashboard": {
+        "title": "Dashboard card access",
+        "description": "Control which private data and administrator actions the card API can expose. These controls are enforced by the integration, not only hidden in the card.",
+        "data": {
+          "card_show_user_names": "Allow user names in cards",
+          "card_show_client_details": "Allow player and device details in cards",
+          "card_allow_history": "Allow administrators to browse watch history in cards",
+          "card_allow_termination": "Allow administrators to terminate streams from cards"
         }
       },
       "plex": {

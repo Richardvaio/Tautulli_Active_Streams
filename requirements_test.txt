@@ -1,3 +1,4 @@
-pytest
-pytest-cov
-pytest-homeassistant-custom-component
+pytest==8.3.4
+pytest-cov==6.0.0
+pytest-homeassistant-custom-component==0.13.205
+ruff==0.16.3

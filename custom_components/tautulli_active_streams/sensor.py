@@ -218,9 +218,7 @@ async def async_setup_entry(
                 return
             new_sensors = []
             new_user_ids = []
-            for stats_dict in history_coordinator.data.get(
-                "user_stats", {}
-            ).values():
+            for stats_dict in history_coordinator.data.get("user_stats", {}).values():
                 username = stats_dict.get("username", "Unknown")
                 user_id = stats_dict.get("user_id")
                 if user_id is None or str(user_id) in tracked_user_ids:

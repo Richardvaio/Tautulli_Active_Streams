@@ -6,8 +6,8 @@
     "integration_type": "hub",
     "iot_class": "local_polling",
     "requirements": [],
-    "dependencies": [],
+    "dependencies": ["http", "websocket_api"],
     "codeowners": ["@Richardvaio"],
     "config_flow": true,
-    "version": "2.6.1"
+    "version": "2.7.0"
 }

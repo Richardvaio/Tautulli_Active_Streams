@@ -8,6 +8,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import TautulliAPI
+from .card_cache import CardDataCache
 from .const import (
     CONF_ENABLE_STATISTICS,
     CONF_GEO_PROVIDER,
@@ -20,8 +21,11 @@ from .const import (
 )
 from .coordinators import TautulliHistoryCoordinator, TautulliSessionsCoordinator
 from .geo import IPGeoCache
+from .image import ImagePathCache
+from .runtime import TautulliRuntimeData
 from .services import async_setup_kill_stream_services  # kill-stream services
 from .views import TautulliImageView
+from .websocket_api import async_register_websocket_commands
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,17 +83,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await history_coordinator.async_config_entry_first_refresh()
 
     # 4) Store everything in hass.data
+    image_cache = ImagePathCache()
+    card_cache = CardDataCache()
     hass.data[DOMAIN][entry.entry_id] = {
         "api": api,
         "sessions_coordinator": sessions_coordinator,
         "history_coordinator": history_coordinator,
         "geo_cache": geo_cache,
+        "image_cache": image_cache,
+        "card_cache": card_cache,
+        "runtime": TautulliRuntimeData(
+            api=api,
+            sessions=sessions_coordinator,
+            history=history_coordinator,
+            geo_cache=geo_cache,
+            image_cache=image_cache,
+            card_cache=card_cache,
+        ),
     }
 
     # 5) Register the authenticated image view once across multiple entries.
     if "tautulli_image_view_registered" not in hass.data:
         hass.http.register_view(TautulliImageView)
         hass.data["tautulli_image_view_registered"] = True
+
+    if "tautulli_card_api_registered" not in hass.data:
+        async_register_websocket_commands(hass)
+        hass.data["tautulli_card_api_registered"] = True
 
     # 6) Forward to sensor + button
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

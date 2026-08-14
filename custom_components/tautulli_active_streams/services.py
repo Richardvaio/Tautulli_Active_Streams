@@ -22,9 +22,7 @@ DEFAULT_TERMINATION_MESSAGE = "Stream ended by admin."
 
 _BASE_FIELDS = {
     vol.Optional(ATTR_CONFIG_ENTRY_ID): cv.string,
-    vol.Optional(
-        ATTR_MESSAGE, default=DEFAULT_TERMINATION_MESSAGE
-    ): cv.string,
+    vol.Optional(ATTR_MESSAGE, default=DEFAULT_TERMINATION_MESSAGE): cv.string,
 }
 
 KILL_ALL_SCHEMA = vol.Schema(_BASE_FIELDS)
@@ -60,13 +58,13 @@ def _loaded_entries(hass: HomeAssistant) -> dict[str, dict[str, Any]]:
     return {
         entry_id: data
         for entry_id, data in hass.data.get(DOMAIN, {}).items()
-        if isinstance(data, dict)
-        and "api" in data
-        and "sessions_coordinator" in data
+        if isinstance(data, dict) and "api" in data and "sessions_coordinator" in data
     }
 
 
-def _resolve_entry(hass: HomeAssistant, call: ServiceCall) -> tuple[str, dict[str, Any]]:
+def _resolve_entry(
+    hass: HomeAssistant, call: ServiceCall
+) -> tuple[str, dict[str, Any]]:
     """Resolve exactly one entry, requiring a selection when ambiguous."""
     entries = _loaded_entries(hass)
     requested_entry_id = call.data.get(ATTR_CONFIG_ENTRY_ID)
@@ -105,7 +103,10 @@ async def _async_terminate(
         return {"requested": 0, "succeeded": [], "failed": []}
 
     results = await asyncio.gather(
-        *(api.terminate_session(session_id, message=message) for session_id in session_ids),
+        *(
+            api.terminate_session(session_id, message=message)
+            for session_id in session_ids
+        ),
         return_exceptions=True,
     )
     succeeded: list[str] = []
@@ -155,7 +156,10 @@ async def async_setup_kill_stream_services(
 
         matched = []
         for session in _active_sessions(data):
-            if requested_user_id and str(session.get("user_id", "")) == requested_user_id:
+            if (
+                requested_user_id
+                and str(session.get("user_id", "")) == requested_user_id
+            ):
                 matched.append(session)
                 continue
             names = {

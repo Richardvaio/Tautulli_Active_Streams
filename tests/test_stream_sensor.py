@@ -57,9 +57,7 @@ def test_basic_attributes_do_not_expose_network_or_location() -> None:
 
 def test_coarse_location_requires_geolocation_opt_in() -> None:
     """Geolocation opt-in exposes coarse fields but never raw IPs."""
-    attributes = _sensor(
-        {CONF_ENABLE_IP_GEOLOCATION: True}
-    ).extra_state_attributes
+    attributes = _sensor({CONF_ENABLE_IP_GEOLOCATION: True}).extra_state_attributes
 
     assert attributes["geo_city"] == "London"
     assert attributes["geo_country"] == "United Kingdom"
@@ -93,9 +91,7 @@ async def test_new_rating_key_clears_previous_plex_metadata(monkeypatch) -> None
             "plex_verify_ssl": True,
         }
     )
-    sensor.coordinator = SimpleNamespace(
-        data={"sessions": [{"rating_key": "new"}]}
-    )
+    sensor.coordinator = SimpleNamespace(data={"sessions": [{"rating_key": "new"}]})
     sensor._index = 0
     sensor._last_rating_key = "old"
     sensor._plex_metadata = {"title": "Old title"}

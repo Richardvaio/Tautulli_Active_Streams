@@ -34,9 +34,7 @@ def test_entry_is_required_when_multiple_servers_are_loaded() -> None:
 def test_explicit_entry_is_resolved() -> None:
     """An explicit entry scopes the action to exactly one server."""
     selected = _runtime()
-    hass = SimpleNamespace(
-        data={DOMAIN: {"first": _runtime(), "selected": selected}}
-    )
+    hass = SimpleNamespace(data={DOMAIN: {"first": _runtime(), "selected": selected}})
     call = SimpleNamespace(data={"config_entry_id": "selected"})
 
     assert _resolve_entry(hass, call) == ("selected", selected)

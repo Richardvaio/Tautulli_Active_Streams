@@ -8,6 +8,7 @@ import pytest
 
 from custom_components.tautulli_active_streams.api import (
     TautulliAPI,
+    TautulliAPIError,
     TautulliAuthError,
 )
 
@@ -50,6 +51,15 @@ def _api(response: FakeResponse) -> TautulliAPI:
     return TautulliAPI("http://tautulli", "secret", FakeSession(response))
 
 
+def test_ssl_setting_is_available_to_companion_requests() -> None:
+    """The image proxy must use the same TLS policy as API requests."""
+    api = TautulliAPI(
+        "https://tautulli", "secret", FakeSession(FakeResponse(200, {})), False
+    )
+
+    assert api.verify_ssl is False
+
+
 @pytest.mark.asyncio
 async def test_error_envelope_preserves_auth_error() -> None:
     """An invalid-key payload must initiate reauthentication."""
@@ -68,6 +78,26 @@ async def test_error_envelope_preserves_auth_error() -> None:
 
     with pytest.raises(TautulliAuthError):
         await api.get_activity()
+
+
+@pytest.mark.asyncio
+async def test_command_error_envelope_is_not_treated_as_empty_success() -> None:
+    """HTTP 200 does not hide a failed Tautulli API command."""
+    api = _api(
+        FakeResponse(
+            200,
+            {
+                "response": {
+                    "result": "error",
+                    "message": "Invalid section_id",
+                    "data": {},
+                }
+            },
+        )
+    )
+
+    with pytest.raises(TautulliAPIError):
+        await api.get_recently_added(section_id="missing")
 
 
 @pytest.mark.asyncio
@@ -96,3 +126,41 @@ async def test_terminate_session_uses_post_and_validates_result() -> None:
         "session_id": "session-1",
         "message": "Finished",
     }
+
+
+@pytest.mark.asyncio
+async def test_recently_added_is_bounded_and_filtered() -> None:
+    """Recent-media requests clamp payload size and pass explicit filters."""
+    response = FakeResponse(
+        200,
+        {"response": {"result": "success", "data": {"recently_added": []}}},
+    )
+    session = FakeSession(response)
+    api = TautulliAPI("http://tautulli", "secret", session)
+
+    await api.get_recently_added(start=5, count=500, media_type="movie", section_id="2")
+
+    assert session.get_calls[0][1]["params"] == {
+        "start": 5,
+        "count": 50,
+        "media_type": "movie",
+        "section_id": "2",
+    }
+
+
+@pytest.mark.asyncio
+async def test_home_stats_uses_one_explicit_stat_collection() -> None:
+    """Home statistics remain bounded and deterministic across Tautulli settings."""
+    response = FakeResponse(
+        200,
+        {"response": {"result": "success", "data": [{"rows": []}]}},
+    )
+    session = FakeSession(response)
+    api = TautulliAPI("http://tautulli", "secret", session)
+
+    await api.get_home_stats(stat_id="popular_movies", count=75)
+
+    params = session.get_calls[0][1]["params"]
+    assert params["stat_id"] == "popular_movies"
+    assert params["stats_count"] == 50
+    assert params["grouping"] == 1

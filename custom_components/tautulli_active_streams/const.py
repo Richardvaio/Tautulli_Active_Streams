@@ -25,6 +25,10 @@ CONF_ADVANCED_ATTRIBUTES = "advanced_attributes"
 CONF_ENABLE_IP_GEOLOCATION = "enable_ip_geolocation"
 CONF_EXPOSE_DETAILED_LOCATION = "expose_detailed_location"
 CONF_GEO_PROVIDER = "geo_provider"
+CONF_CARD_SHOW_USER_NAMES = "card_show_user_names"
+CONF_CARD_SHOW_CLIENT_DETAILS = "card_show_client_details"
+CONF_CARD_ALLOW_TERMINATION = "card_allow_termination"
+CONF_CARD_ALLOW_HISTORY = "card_allow_history"
 
 MAX_HISTORY_RECORDS = 25000
 
