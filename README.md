@@ -78,7 +78,7 @@ Install it separately through HACS as a **Dashboard** repository:
 
 `https://github.com/Richardvaio/tautulli-active-streams-card`
 
-The card requires integration version **2.7.0 or newer** and card API schema `1`. The integration must be installed and restarted before adding the card.
+The card requires integration version **2.7.0 or newer**. The integration must be installed and restarted before adding the card.
 
 Legacy movie/TV and music YAML examples remain in this repository for existing dashboards. They require `auto-entities`, `button-card`, `bar-card` and `card-mod`.
 
