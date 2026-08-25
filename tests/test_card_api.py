@@ -280,6 +280,38 @@ def test_media_and_history_serializers_are_allowlisted() -> None:
         assert forbidden not in serialized
 
 
+def test_media_serializer_normalizes_season_hierarchy() -> None:
+    """Season rows use their parent as the show and their own index as season."""
+    media = serialize_media_item(
+        _hass(),
+        _entry(),
+        {
+            "rating_key": "season-10",
+            "parent_rating_key": "show-1",
+            "grandparent_rating_key": "",
+            "media_type": "season",
+            "title": "Season 10",
+            "full_title": "Season 10",
+            "parent_title": "Below Deck Mediterranean",
+            "grandparent_title": "",
+            "media_index": "10",
+            "parent_media_index": "1",
+        },
+    )
+
+    assert media["hierarchy"] == {
+        "show": "Below Deck Mediterranean",
+        "season": "Season 10",
+        "episode": None,
+        "season_number": 10,
+        "artist": None,
+        "album": None,
+        "track": None,
+        "parent_id": "show-1",
+        "grandparent_id": None,
+    }
+
+
 def test_active_serializer_enforces_entry_privacy_options() -> None:
     """Card configuration cannot reveal fields disabled at the backend."""
     entry = _entry()

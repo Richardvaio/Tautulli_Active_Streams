@@ -190,6 +190,29 @@ def serialize_media_item(
     rating_key = _text(item.get("rating_key"))
     media_type = (_text(item.get("media_type")) or "unknown").lower()
     duration_ms = max(0, _integer(item.get("duration")))
+    hierarchy = {
+        "show": _text(item.get("grandparent_title")),
+        "season": _text(item.get("parent_title")),
+        "episode": _integer(item.get("media_index")) or None,
+        "season_number": _integer(item.get("parent_media_index")) or None,
+        "artist": _text(item.get("grandparent_title")),
+        "album": _text(item.get("parent_title")),
+        "track": _integer(item.get("media_index")) or None,
+        "parent_id": _text(item.get("parent_rating_key")),
+        "grandparent_id": _text(item.get("grandparent_rating_key")),
+    }
+    if media_type == "season":
+        hierarchy.update(
+            {
+                "show": _text(item.get("parent_title")),
+                "season": _text(item.get("title")),
+                "episode": None,
+                "season_number": _integer(item.get("media_index")) or None,
+                "artist": None,
+                "album": None,
+                "track": None,
+            }
+        )
     return {
         "id": f"{server_id}:{rating_key}" if rating_key else None,
         "rating_key": rating_key,
@@ -208,17 +231,7 @@ def serialize_media_item(
         "audience_rating": _number(item.get("audience_rating")) or None,
         "genres": _string_list(item.get("genres")),
         "studio": _text(item.get("studio")),
-        "hierarchy": {
-            "show": _text(item.get("grandparent_title")),
-            "season": _text(item.get("parent_title")),
-            "episode": _integer(item.get("media_index")) or None,
-            "season_number": _integer(item.get("parent_media_index")) or None,
-            "artist": _text(item.get("grandparent_title")),
-            "album": _text(item.get("parent_title")),
-            "track": _integer(item.get("media_index")) or None,
-            "parent_id": _text(item.get("parent_rating_key")),
-            "grandparent_id": _text(item.get("grandparent_rating_key")),
-        },
+        "hierarchy": hierarchy,
         "library": {
             "id": _text(item.get("section_id")),
             "name": _text(item.get("library_name")) or _text(item.get("section_name")),
