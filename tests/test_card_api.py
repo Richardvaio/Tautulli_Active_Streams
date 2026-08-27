@@ -179,6 +179,45 @@ def test_active_serializer_is_normalized_and_privacy_safe() -> None:
         assert forbidden not in serialized
 
 
+def test_active_serializer_prefers_full_resolution_and_reports_atmos() -> None:
+    """Tautulli 2.18 quality metadata is normalized for the dashboard card."""
+    result = serialize_active_stream(
+        _hass(),
+        _entry(),
+        {
+            "session_id": "session-1",
+            "video_resolution": "4k",
+            "stream_video_resolution": "4k",
+            "video_full_resolution": "2160p",
+            "stream_video_full_resolution": "2160p",
+            "audio_atmos": "1",
+            "stream_audio_atmos": "1",
+        },
+    )
+
+    assert result["quality"]["video_resolution"] == "2160p"
+    assert result["quality"]["audio_atmos"] is True
+    assert result["quality"]["stream_audio_atmos"] is True
+    assert result["quality"]["atmos"] is True
+
+
+def test_active_serializer_uses_output_atmos_state_when_available() -> None:
+    """A non-Atmos transcode must not inherit Atmos from its source media."""
+    result = serialize_active_stream(
+        _hass(),
+        _entry(),
+        {
+            "session_id": "session-1",
+            "audio_atmos": "1",
+            "stream_audio_atmos": "0",
+        },
+    )
+
+    assert result["quality"]["audio_atmos"] is True
+    assert result["quality"]["stream_audio_atmos"] is False
+    assert result["quality"]["atmos"] is False
+
+
 def test_get_entries_reports_schema_and_capabilities() -> None:
     """The editor can discover compatible loaded entries."""
     connection = FakeConnection()

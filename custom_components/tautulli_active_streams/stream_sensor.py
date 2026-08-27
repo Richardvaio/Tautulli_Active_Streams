@@ -383,7 +383,11 @@ class TautulliStreamSensor(
         attributes["relayed"] = session.get("relayed")
         attributes["bandwidth"] = session.get("bandwidth")
         attributes["video_resolution"] = session.get("video_resolution")
+        attributes["video_full_resolution"] = session.get("video_full_resolution")
         attributes["stream_video_resolution"] = session.get("stream_video_resolution")
+        attributes["stream_video_full_resolution"] = session.get(
+            "stream_video_full_resolution"
+        )
         attributes["transcode_decision"] = session.get("transcode_decision")
         attributes["stream_paused_duration"] = self._paused_duration_str
         attributes["live"] = session.get("live")
@@ -393,11 +397,13 @@ class TautulliStreamSensor(
         attributes["audio_codec"] = session.get("audio_codec")
         attributes["audio_channel_layout"] = session.get("audio_channel_layout")
         attributes["audio_bitrate"] = session.get("audio_bitrate")
+        attributes["audio_atmos"] = session.get("audio_atmos")
         attributes["stream_audio_codec"] = session.get("stream_audio_codec")
         attributes["stream_audio_channel_layout"] = session.get(
             "stream_audio_channel_layout"
         )
         attributes["stream_audio_bitrate"] = session.get("stream_audio_bitrate")
+        attributes["stream_audio_atmos"] = session.get("stream_audio_atmos")
 
         # Coarse geolocation is only exposed when the user explicitly enables
         # geolocation. Raw public IPs, coordinates and postal codes require the

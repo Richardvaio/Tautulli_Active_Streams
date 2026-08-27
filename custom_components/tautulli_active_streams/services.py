@@ -9,6 +9,7 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from .api import TautulliAPIError
 from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
@@ -116,8 +117,11 @@ async def _async_terminate(
             succeeded.append(session_id)
             continue
         reason = "Tautulli rejected the request"
-        if isinstance(result, Exception):
+        if isinstance(result, TautulliAPIError):
+            reason = str(result)
+        elif isinstance(result, Exception):
             reason = result.__class__.__name__
+        if isinstance(result, Exception):
             _LOGGER.warning(
                 "Tautulli session termination failed for session %s: %s",
                 session_id,

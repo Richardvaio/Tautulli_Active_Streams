@@ -101,6 +101,26 @@ async def test_command_error_envelope_is_not_treated_as_empty_success() -> None:
 
 
 @pytest.mark.asyncio
+async def test_http_400_preserves_tautulli_command_error() -> None:
+    """Tautulli 2.18 command failures retain their HTTP 400 error message."""
+    api = _api(
+        FakeResponse(
+            400,
+            {
+                "response": {
+                    "result": "error",
+                    "message": "Invalid section_id",
+                    "data": {},
+                }
+            },
+        )
+    )
+
+    with pytest.raises(TautulliAPIError, match="Invalid section_id"):
+        await api.get_recently_added(section_id="missing")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [401, 403])
 async def test_http_auth_status_raises_auth_error(status: int) -> None:
     """HTTP authentication failures must not be reported as connectivity."""

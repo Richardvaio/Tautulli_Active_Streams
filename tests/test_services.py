@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from homeassistant.exceptions import ServiceValidationError
 
+from custom_components.tautulli_active_streams.api import TautulliAPIError
 from custom_components.tautulli_active_streams.const import DOMAIN
 from custom_components.tautulli_active_streams.services import (
     _async_terminate,
@@ -64,3 +65,15 @@ async def test_termination_returns_per_session_results() -> None:
             {"session_id": "three", "reason": "RuntimeError"},
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_termination_preserves_tautulli_rejection_message() -> None:
+    """A command-level rejection is useful to service callers."""
+    api = SimpleNamespace(
+        terminate_session=AsyncMock(side_effect=TautulliAPIError("Session ended"))
+    )
+
+    result = await _async_terminate(api, [{"session_id": "one"}], "Finished")
+
+    assert result["failed"] == [{"session_id": "one", "reason": "Session ended"}]

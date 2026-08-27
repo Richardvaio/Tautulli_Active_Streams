@@ -79,6 +79,26 @@ def test_detailed_location_requires_separate_opt_in() -> None:
     assert attributes["geo_postal_code"] == "AA1 1AA"
 
 
+def test_tautulli_218_quality_attributes_are_exposed() -> None:
+    """Full resolution and Atmos metadata remain available to HA users."""
+    sensor = _sensor({})
+    sensor.coordinator.data["sessions"][0].update(
+        {
+            "video_full_resolution": "2160p",
+            "stream_video_full_resolution": "1080p",
+            "audio_atmos": "1",
+            "stream_audio_atmos": "0",
+        }
+    )
+
+    attributes = sensor.extra_state_attributes
+
+    assert attributes["video_full_resolution"] == "2160p"
+    assert attributes["stream_video_full_resolution"] == "1080p"
+    assert attributes["audio_atmos"] == "1"
+    assert attributes["stream_audio_atmos"] == "0"
+
+
 @pytest.mark.asyncio
 async def test_new_rating_key_clears_previous_plex_metadata(monkeypatch) -> None:
     """A reassigned session slot cannot retain details from its old title."""

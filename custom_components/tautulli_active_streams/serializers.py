@@ -51,6 +51,14 @@ def serialize_active_stream(
     duration_ms = max(0, _integer(session.get("duration")))
     view_offset_ms = max(0, _integer(session.get("view_offset")))
     remaining_ms = max(0, duration_ms - view_offset_ms)
+    source_audio_atmos = bool(_integer(session.get("audio_atmos")))
+    raw_stream_audio_atmos = session.get("stream_audio_atmos")
+    stream_audio_atmos = bool(_integer(raw_stream_audio_atmos))
+    output_audio_atmos = (
+        stream_audio_atmos
+        if raw_stream_audio_atmos not in (None, "")
+        else source_audio_atmos
+    )
     show_user = entry.options.get(CONF_CARD_SHOW_USER_NAMES, True)
     show_client = entry.options.get(CONF_CARD_SHOW_CLIENT_DETAILS, True)
 
@@ -128,7 +136,9 @@ def serialize_active_stream(
         "quality": {
             "decision": _text(session.get("transcode_decision")),
             "bandwidth_kbps": max(0, _integer(session.get("bandwidth"))),
-            "video_resolution": _text(session.get("stream_video_resolution"))
+            "video_resolution": _text(session.get("stream_video_full_resolution"))
+            or _text(session.get("video_full_resolution"))
+            or _text(session.get("stream_video_resolution"))
             or _text(session.get("video_resolution")),
             "video_codec": _text(session.get("stream_video_codec")),
             "audio_codec": _text(session.get("stream_audio_codec"))
@@ -141,6 +151,9 @@ def serialize_active_stream(
                     session.get("stream_audio_bitrate") or session.get("audio_bitrate")
                 ),
             ),
+            "audio_atmos": source_audio_atmos,
+            "stream_audio_atmos": stream_audio_atmos,
+            "atmos": output_audio_atmos,
         },
         "images": active_stream_images(hass, entry.entry_id, session),
     }

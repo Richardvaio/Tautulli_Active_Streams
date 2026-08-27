@@ -10,7 +10,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 
-from .api import TautulliAuthError, TautulliConnectionError
+from .api import TautulliAPIError, TautulliAuthError, TautulliConnectionError
 from .card_api import CARD_API_SCHEMA_VERSION, card_capabilities
 from .const import CONF_CARD_ALLOW_HISTORY, CONF_CARD_ALLOW_TERMINATION, DOMAIN
 from .serializers import (
@@ -39,6 +39,8 @@ async def _cached_card_data(
         connection.send_error(
             msg_id, "authentication_failed", "Tautulli reauthentication is required"
         )
+    except TautulliAPIError as err:
+        connection.send_error(msg_id, "upstream_request_rejected", str(err))
     except TautulliConnectionError:
         connection.send_error(
             msg_id, "cannot_connect", "Tautulli is temporarily unavailable"
@@ -471,6 +473,9 @@ async def websocket_terminate_session(hass, connection, msg) -> None:
             "authentication_failed",
             "Tautulli reauthentication is required",
         )
+        return
+    except TautulliAPIError as err:
+        connection.send_error(msg["id"], "termination_failed", str(err))
         return
     except TautulliConnectionError:
         connection.send_error(
