@@ -19,7 +19,11 @@ from .const import (
     DOMAIN,
     GEO_PROVIDER_TAUTULLI,
 )
-from .coordinators import TautulliHistoryCoordinator, TautulliSessionsCoordinator
+from .coordinators import (
+    RuntimeAuthFailureTracker,
+    TautulliHistoryCoordinator,
+    TautulliSessionsCoordinator,
+)
 from .geo import IPGeoCache
 from .image import ImagePathCache
 from .runtime import TautulliRuntimeData
@@ -30,6 +34,7 @@ from .websocket_api import async_register_websocket_commands
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.BUTTON, Platform.DEVICE_TRACKER]
+AUTH_FAILURE_TRACKERS = f"{DOMAIN}_auth_failure_trackers"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -59,6 +64,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     stats_interval = entry.options.get(
         CONF_STATISTICS_INTERVAL, DEFAULT_STATISTICS_INTERVAL
     )
+    auth_failure_trackers = hass.data.setdefault(AUTH_FAILURE_TRACKERS, {})
+    auth_failure_tracker = auth_failure_trackers.setdefault(
+        entry.entry_id, RuntimeAuthFailureTracker()
+    )
 
     sessions_coordinator = TautulliSessionsCoordinator(
         hass=hass,
@@ -67,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=session_interval),
         config_entry=entry,
         geo_cache=geo_cache,
+        auth_failure_tracker=auth_failure_tracker,
     )
 
     history_coordinator = TautulliHistoryCoordinator(
@@ -76,6 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         update_interval=timedelta(seconds=stats_interval),
         config_entry=entry,
         geo_cache=geo_cache,
+        auth_failure_tracker=auth_failure_tracker,
     )
 
     # 3) Do first refresh
@@ -92,6 +103,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "geo_cache": geo_cache,
         "image_cache": image_cache,
         "card_cache": card_cache,
+        "auth_failure_tracker": auth_failure_tracker,
         "runtime": TautulliRuntimeData(
             api=api,
             sessions=sessions_coordinator,
@@ -99,6 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             geo_cache=geo_cache,
             image_cache=image_cache,
             card_cache=card_cache,
+            auth_failure_tracker=auth_failure_tracker,
         ),
     }
 

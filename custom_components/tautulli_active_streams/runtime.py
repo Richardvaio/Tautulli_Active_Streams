@@ -8,7 +8,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .api import TautulliAPI
     from .card_cache import CardDataCache
-    from .coordinators import TautulliHistoryCoordinator, TautulliSessionsCoordinator
+    from .coordinators import (
+        RuntimeAuthFailureTracker,
+        TautulliHistoryCoordinator,
+        TautulliSessionsCoordinator,
+    )
     from .geo import IPGeoCache
     from .image import ImagePathCache
 
@@ -27,3 +31,4 @@ class TautulliRuntimeData:
     geo_cache: IPGeoCache
     image_cache: ImagePathCache
     card_cache: CardDataCache
+    auth_failure_tracker: RuntimeAuthFailureTracker

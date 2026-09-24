@@ -36,6 +36,33 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+AUTH_FAILURE_GRACE_SECONDS = 300
+
+
+class RuntimeAuthFailureTracker:
+    """Delay reauthentication until credential rejection is sustained."""
+
+    def __init__(self, grace_seconds: float = AUTH_FAILURE_GRACE_SECONDS) -> None:
+        self._grace_seconds = grace_seconds
+        self._first_failure: float | None = None
+        self._reauth_started = False
+
+    def record_failure(self) -> bool:
+        """Return True once a continuous auth failure exceeds the grace period."""
+        now = time.monotonic()
+        if self._first_failure is None:
+            self._first_failure = now
+            return False
+        if self._reauth_started or now - self._first_failure < self._grace_seconds:
+            return False
+        self._reauth_started = True
+        return True
+
+    def reset(self) -> None:
+        """Clear a suspected authentication failure after recovery or an outage."""
+        self._first_failure = None
+        self._reauth_started = False
+
 
 def _as_int(value: Any, default: int = 0) -> int:
     """Normalize Tautulli integer fields, which may arrive as strings."""
@@ -124,6 +151,7 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         update_interval: timedelta,
         config_entry: ConfigEntry,
         geo_cache: IPGeoCache,
+        auth_failure_tracker: RuntimeAuthFailureTracker,
     ) -> None:
         super().__init__(
             hass, logger, name="TautulliSessions", update_interval=update_interval
@@ -131,6 +159,7 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.config_entry = config_entry
         self.api = api
         self._geo_cache = geo_cache  # store reference to the geo cache
+        self._auth_failure_tracker = auth_failure_tracker
 
         self.start_times: dict[str, float] = {}
         self.paused_since: dict[str, float] = {}
@@ -140,12 +169,19 @@ class TautulliSessionsCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             data = await self.api.get_activity()
         except TautulliAuthError as err:
-            self.config_entry.async_start_reauth(self.hass)
+            if self._auth_failure_tracker.record_failure():
+                self.config_entry.async_start_reauth(self.hass)
+                raise UpdateFailed(
+                    "Tautulli authentication failed; reauthentication required"
+                ) from err
             raise UpdateFailed(
-                "Tautulli authentication failed; reauthentication required"
+                "Tautulli rejected the API key; waiting for the server to recover"
             ) from err
         except Exception as err:
+            self._auth_failure_tracker.reset()
             raise UpdateFailed(f"Failed to update Tautulli sessions: {err}") from err
+
+        self._auth_failure_tracker.reset()
 
         if not data:
             data = {"sessions": [], "diagnostics": {}}
@@ -245,6 +281,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         update_interval: timedelta,
         config_entry: ConfigEntry,
         geo_cache: IPGeoCache,
+        auth_failure_tracker: RuntimeAuthFailureTracker,
     ) -> None:
         super().__init__(
             hass, logger, name="TautulliHistory", update_interval=update_interval
@@ -252,6 +289,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.config_entry = config_entry
         self.api = api
         self._geo_cache = geo_cache
+        self._auth_failure_tracker = auth_failure_tracker
 
         # store old stats toggle
         self.old_stats_toggle = config_entry.options.get(CONF_ENABLE_STATISTICS, False)
@@ -277,12 +315,18 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 data["history"] = hist_resp
                 data["user_stats"] = self._parse_user_history(hist_resp)
             except TautulliAuthError as err:
-                self.config_entry.async_start_reauth(self.hass)
+                if self._auth_failure_tracker.record_failure():
+                    self.config_entry.async_start_reauth(self.hass)
+                    raise UpdateFailed(
+                        "Tautulli authentication failed; reauthentication required"
+                    ) from err
                 raise UpdateFailed(
-                    "Tautulli authentication failed; reauthentication required"
+                    "Tautulli rejected the API key; waiting for the server to recover"
                 ) from err
             except Exception as err:
+                self._auth_failure_tracker.reset()
                 raise UpdateFailed(f"Failed to fetch Tautulli history: {err}") from err
+            self._auth_failure_tracker.reset()
         else:
             data["history"] = {}
             data["user_stats"] = {}

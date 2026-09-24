@@ -10,13 +10,14 @@ from custom_components.tautulli_active_streams.api import (
     TautulliAPI,
     TautulliAPIError,
     TautulliAuthError,
+    TautulliConnectionError,
 )
 
 
 class FakeResponse:
     """Minimal aiohttp response context manager."""
 
-    def __init__(self, status: int, payload: dict[str, Any]) -> None:
+    def __init__(self, status: int, payload: dict[str, Any] | Exception) -> None:
         self.status = status
         self._payload = payload
 
@@ -27,6 +28,8 @@ class FakeResponse:
         return None
 
     async def json(self) -> dict[str, Any]:
+        if isinstance(self._payload, Exception):
+            raise self._payload
         return self._payload
 
 
@@ -122,11 +125,49 @@ async def test_http_400_preserves_tautulli_command_error() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status", [401, 403])
-async def test_http_auth_status_raises_auth_error(status: int) -> None:
-    """HTTP authentication failures must not be reported as connectivity."""
-    api = _api(FakeResponse(status, {}))
+async def test_explicit_invalid_key_status_raises_auth_error(status: int) -> None:
+    """Only an explicit invalid-key response is an authentication failure."""
+    api = _api(
+        FakeResponse(
+            status,
+            {
+                "response": {
+                    "result": "error",
+                    "message": "Invalid apikey",
+                    "data": {},
+                }
+            },
+        )
+    )
 
     with pytest.raises(TautulliAuthError):
+        await api.get_server_info()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    ["API key not generated", "API key not generated correctly"],
+)
+async def test_startup_auth_status_is_temporary(message: str) -> None:
+    """Tautulli startup states must not start Home Assistant reauthentication."""
+    api = _api(
+        FakeResponse(
+            401,
+            {"response": {"result": "error", "message": message, "data": {}}},
+        )
+    )
+
+    with pytest.raises(TautulliConnectionError, match=message):
+        await api.get_server_info()
+
+
+@pytest.mark.asyncio
+async def test_non_json_auth_status_is_temporary() -> None:
+    """A proxy or startup response cannot prove that the API key is invalid."""
+    api = _api(FakeResponse(401, ValueError("not JSON")))
+
+    with pytest.raises(TautulliConnectionError, match="Non-JSON HTTP 401"):
         await api.get_server_info()
 
 

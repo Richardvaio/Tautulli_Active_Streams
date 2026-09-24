@@ -35,13 +35,22 @@ async def _cached_card_data(
     try:
         return await runtime.card_cache.get_or_fetch(key, ttl, fetch)
     except TautulliAuthError:
-        entry.async_start_reauth(hass)
-        connection.send_error(
-            msg_id, "authentication_failed", "Tautulli reauthentication is required"
-        )
+        if runtime.auth_failure_tracker.record_failure():
+            entry.async_start_reauth(hass)
+            connection.send_error(
+                msg_id,
+                "authentication_failed",
+                "Tautulli reauthentication is required",
+            )
+        else:
+            connection.send_error(
+                msg_id, "cannot_connect", "Tautulli is temporarily unavailable"
+            )
     except TautulliAPIError as err:
+        runtime.auth_failure_tracker.reset()
         connection.send_error(msg_id, "upstream_request_rejected", str(err))
     except TautulliConnectionError:
+        runtime.auth_failure_tracker.reset()
         connection.send_error(
             msg_id, "cannot_connect", "Tautulli is temporarily unavailable"
         )
@@ -467,21 +476,29 @@ async def websocket_terminate_session(hass, connection, msg) -> None:
             msg["session_id"], msg["message"]
         )
     except TautulliAuthError:
-        entry.async_start_reauth(hass)
-        connection.send_error(
-            msg["id"],
-            "authentication_failed",
-            "Tautulli reauthentication is required",
-        )
+        if data["auth_failure_tracker"].record_failure():
+            entry.async_start_reauth(hass)
+            connection.send_error(
+                msg["id"],
+                "authentication_failed",
+                "Tautulli reauthentication is required",
+            )
+        else:
+            connection.send_error(
+                msg["id"], "cannot_connect", "Tautulli is temporarily unavailable"
+            )
         return
     except TautulliAPIError as err:
+        data["auth_failure_tracker"].reset()
         connection.send_error(msg["id"], "termination_failed", str(err))
         return
     except TautulliConnectionError:
+        data["auth_failure_tracker"].reset()
         connection.send_error(
             msg["id"], "cannot_connect", "Tautulli is temporarily unavailable"
         )
         return
+    data["auth_failure_tracker"].reset()
     if succeeded:
         await data["sessions_coordinator"].async_request_refresh()
     connection.send_result(

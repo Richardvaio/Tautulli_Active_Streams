@@ -20,10 +20,39 @@ from custom_components.tautulli_active_streams.const import (
     STATISTICS_PERIOD_ROLLING,
 )
 from custom_components.tautulli_active_streams.coordinators import (
+    RuntimeAuthFailureTracker,
     TautulliHistoryCoordinator,
     statistics_period,
     statistics_start,
 )
+
+
+def test_runtime_auth_failure_requires_continuous_grace_period() -> None:
+    """One transient rejection must not create a reauthentication flow."""
+    tracker = RuntimeAuthFailureTracker(grace_seconds=300)
+
+    with patch(
+        "custom_components.tautulli_active_streams.coordinators.time.monotonic",
+        side_effect=[1000, 1299, 1300, 1301],
+    ):
+        assert tracker.record_failure() is False
+        assert tracker.record_failure() is False
+        assert tracker.record_failure() is True
+        assert tracker.record_failure() is False
+
+
+def test_runtime_auth_failure_resets_after_recovery() -> None:
+    """A success or connectivity failure clears suspected authentication loss."""
+    tracker = RuntimeAuthFailureTracker(grace_seconds=300)
+
+    with patch(
+        "custom_components.tautulli_active_streams.coordinators.time.monotonic",
+        side_effect=[1000, 1400, 1701],
+    ):
+        assert tracker.record_failure() is False
+        tracker.reset()
+        assert tracker.record_failure() is False
+        assert tracker.record_failure() is True
 
 
 def test_history_aggregates_by_stable_user_id() -> None:
@@ -139,6 +168,7 @@ async def test_history_query_uses_selected_period_and_explicit_grouping() -> Non
     )
     coordinator.api = SimpleNamespace(get_history=AsyncMock(return_value={"data": []}))
     coordinator._geo_cache = None
+    coordinator._auth_failure_tracker = RuntimeAuthFailureTracker()
 
     with patch(
         "custom_components.tautulli_active_streams.coordinators.ha_now",

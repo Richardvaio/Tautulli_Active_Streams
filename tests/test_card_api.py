@@ -21,6 +21,9 @@ from custom_components.tautulli_active_streams.const import (
     CONF_CARD_SHOW_USER_NAMES,
     DOMAIN,
 )
+from custom_components.tautulli_active_streams.coordinators import (
+    RuntimeAuthFailureTracker,
+)
 from custom_components.tautulli_active_streams.image import ImagePathCache
 from custom_components.tautulli_active_streams.serializers import (
     active_stream_envelope,
@@ -92,6 +95,7 @@ def _hass(entry=None):
                 entry.entry_id: {
                     "sessions_coordinator": coordinator,
                     "image_cache": ImagePathCache(),
+                    "auth_failure_tracker": RuntimeAuthFailureTracker(),
                 }
             }
         },
@@ -434,23 +438,31 @@ def test_user_stats_serializer_excludes_location_and_history_maps() -> None:
 
 @pytest.mark.asyncio
 async def test_card_fetch_auth_error_starts_reauthentication() -> None:
-    """Demand-driven card endpoints recover from expired Tautulli keys."""
+    """Card requests debounce a rejected key before starting reauthentication."""
     hass = _hass()
     entry = _entry()
     entry.async_start_reauth = MagicMock()
-    runtime = SimpleNamespace(card_cache=CardDataCache())
+    runtime = SimpleNamespace(
+        card_cache=CardDataCache(),
+        auth_failure_tracker=RuntimeAuthFailureTracker(grace_seconds=0),
+    )
     connection = FakeConnection()
 
     async def invalid_key():
         raise TautulliAuthError("Invalid apikey")
 
-    result = await _cached_card_data(
+    first_result = await _cached_card_data(
         hass, entry, runtime, connection, 9, "recent", 300, invalid_key
     )
+    second_result = await _cached_card_data(
+        hass, entry, runtime, connection, 10, "recent", 300, invalid_key
+    )
 
-    assert result is None
+    assert first_result is None
+    assert second_result is None
     entry.async_start_reauth.assert_called_once_with(hass)
-    assert connection.errors[0][1] == "authentication_failed"
+    assert connection.errors[0][1] == "cannot_connect"
+    assert connection.errors[1][1] == "authentication_failed"
 
 
 @pytest.mark.asyncio
@@ -468,7 +480,9 @@ async def test_recent_media_endpoint_is_bounded_and_normalized() -> None:
         )
     )
     hass.data[DOMAIN][entry.entry_id]["runtime"] = SimpleNamespace(
-        api=api, card_cache=CardDataCache()
+        api=api,
+        card_cache=CardDataCache(),
+        auth_failure_tracker=hass.data[DOMAIN][entry.entry_id]["auth_failure_tracker"],
     )
     connection = FakeConnection()
 
@@ -498,7 +512,9 @@ async def test_home_stats_endpoint_preserves_rank_and_metric() -> None:
         )
     )
     hass.data[DOMAIN][entry.entry_id]["runtime"] = SimpleNamespace(
-        api=api, card_cache=CardDataCache()
+        api=api,
+        card_cache=CardDataCache(),
+        auth_failure_tracker=hass.data[DOMAIN][entry.entry_id]["auth_failure_tracker"],
     )
     connection = FakeConnection()
 

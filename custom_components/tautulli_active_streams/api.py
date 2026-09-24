@@ -65,14 +65,19 @@ class TautulliAPI:
         return f"{self._base_url}?apikey=[REDACTED]&cmd="
 
     @staticmethod
+    def _is_invalid_api_key(message: str) -> bool:
+        """Return whether Tautulli explicitly rejected the supplied API key."""
+        normalized = " ".join(message.lower().replace("_", " ").split())
+        return normalized in {"invalid api key", "invalid apikey"}
+
+    @staticmethod
     def _validate_payload(payload):
         """Raise an authentication error for API-wide credential failures."""
         response = payload.get("response", {}) if isinstance(payload, dict) else {}
         if response.get("result") != "error":
             return payload
         message = str(response.get("message", "Unknown Tautulli error"))
-        lowered = message.lower()
-        if "api key" in lowered or "apikey" in lowered or "unauthorized" in lowered:
+        if TautulliAPI._is_invalid_api_key(message):
             raise TautulliAuthError(message)
         raise TautulliAPIError(message)
 
@@ -82,10 +87,6 @@ class TautulliAPI:
         try:
             payload = await response.json()
         except (aiohttp.ContentTypeError, ValueError) as json_err:
-            if status in (401, 403):
-                raise TautulliAuthError(
-                    f"Tautulli rejected the API key (HTTP {status})"
-                ) from json_err
             if status != 200:
                 raise TautulliConnectionError(
                     f"Non-JSON HTTP {status} response from Tautulli {method} {cmd}"
@@ -98,12 +99,21 @@ class TautulliAPI:
             response_data = (
                 payload.get("response", {}) if isinstance(payload, dict) else {}
             )
-            message = str(
-                response_data.get(
-                    "message", f"Tautulli rejected the API key (HTTP {status})"
-                )
+            message = str(response_data.get("message", "Unknown Tautulli error"))
+            safe_message = message.replace(self._api_key, "[REDACTED]")
+            _LOGGER.debug(
+                "Tautulli API response cmd=%s method=%s status=%s message=%s",
+                cmd,
+                method,
+                status,
+                safe_message,
             )
-            raise TautulliAuthError(message)
+            if self._is_invalid_api_key(message):
+                raise TautulliAuthError(message)
+            raise TautulliConnectionError(
+                f"Temporary HTTP {status} response from Tautulli {method} {cmd}: "
+                f"{safe_message}"
+            )
 
         if status >= 500:
             raise TautulliConnectionError(
@@ -212,7 +222,7 @@ class TautulliAPI:
 
         # Tautulli returns result=error with a message for bad keys
         msg = resp.get("response", {}).get("message", "Unknown error")
-        if "invalid" in msg.lower() or "api" in msg.lower():
+        if self._is_invalid_api_key(msg):
             raise TautulliAuthError(f"Invalid API key: {msg}")
         raise TautulliConnectionError(f"Tautulli error: {msg}")
 
