@@ -347,7 +347,8 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         records = hist_resp.get("data", [])
         for item in records:
-            user = item.get("user", "Unknown")
+            user = str(item.get("user") or "").strip() or "Unknown"
+            friendly_name = str(item.get("friendly_name") or "").strip() or user
             upstream_user_id = item.get("user_id")
             user_key = (
                 str(upstream_user_id)
@@ -357,6 +358,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if user_key not in user_stats:
                 user_stats[user_key] = {
                     "username": user,
+                    "friendly_name": friendly_name,
                     "user_id": item.get("user_id"),
                     "total_plays": 0,
                     "total_play_duration_sec": 0,
@@ -415,6 +417,7 @@ class TautulliHistoryCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             started_ts = _as_int(item.get("started"))
             if started_ts >= stats["last_username_ts"]:
                 stats["username"] = user
+                stats["friendly_name"] = friendly_name
                 stats["last_username_ts"] = started_ts
             # if this record is more recent than our stored "last_started_ts", update last_ip
             if ip_addr and started_ts and started_ts > stats["last_started_ts"]:
