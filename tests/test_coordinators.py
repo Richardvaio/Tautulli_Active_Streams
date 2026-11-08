@@ -63,6 +63,7 @@ def test_history_aggregates_by_stable_user_id() -> None:
             {
                 "user_id": 10,
                 "user": "Old Name",
+                "friendly_name": "Old Friendly Name",
                 "started": "100",
                 "stopped": 150,
                 "duration": "50",
@@ -72,6 +73,7 @@ def test_history_aggregates_by_stable_user_id() -> None:
             {
                 "user_id": 10,
                 "user": "New Name",
+                "friendly_name": "New Friendly Name",
                 "started": 200,
                 "stopped": 250,
                 "duration": 50,
@@ -94,8 +96,10 @@ def test_history_aggregates_by_stable_user_id() -> None:
 
     assert set(result) == {"10", "20"}
     assert result["10"]["username"] == "New Name"
+    assert result["10"]["friendly_name"] == "New Friendly Name"
     assert result["10"]["total_plays"] == 2
     assert result["20"]["username"] == "New Name"
+    assert result["20"]["friendly_name"] == "New Name"
     assert result["20"]["total_plays"] == 1
 
 

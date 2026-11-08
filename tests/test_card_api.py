@@ -418,6 +418,7 @@ def test_user_stats_serializer_excludes_location_and_history_maps() -> None:
     stats = {
         "user_id": "42",
         "username": "Viewer",
+        "friendly_name": "Friendly Viewer",
         "total_plays": 10,
         "total_play_duration_sec": 7200,
         "total_completion_rate": 81.5,
@@ -428,12 +429,47 @@ def test_user_stats_serializer_excludes_location_and_history_maps() -> None:
     result = serialize_user_stats(_entry(), stats)
 
     assert result["id"] == "plex-server-1:42"
+    assert result["display_name"] == "Friendly Viewer"
     assert result["total_duration_seconds"] == 7200
     assert result["completion_percent"] == 81.5
     serialized = repr(result)
     assert "203.0.113.10" not in serialized
     assert "51.5" not in serialized
     assert "device_map" not in serialized
+
+
+def test_top_users_uses_user_identity_not_last_played_media() -> None:
+    """Tautulli's last-play fields cannot replace a top user's display name."""
+    result = serialize_stat_item(
+        _hass(),
+        _entry(),
+        {
+            "user_id": "42",
+            "user": "viewer@example.com",
+            "friendly_name": "Viewer",
+            "total_plays": 10,
+            "total_duration": 7200,
+            "last_play": 1_700_000_000,
+            "title": "Wind River",
+            "full_title": "Wind River",
+            "media_type": "movie",
+            "rating_key": "1234",
+            "guid": "plex://movie/1234",
+            "thumb": "/library/metadata/1234/thumb/1",
+        },
+        rank=1,
+        kind="top_users",
+        metric="plays",
+    )
+
+    assert result["media"]["title"] == "Viewer"
+    assert result["media"]["full_title"] == "Viewer"
+    assert result["media"]["type"] == "user"
+    assert result["media"]["id"] is None
+    assert result["media"]["rating_key"] is None
+    assert result["media"]["guid"] is None
+    assert result["last_played_at"] == "2023-11-14T22:13:20+00:00"
+    assert "Wind River" not in repr(result)
 
 
 @pytest.mark.asyncio

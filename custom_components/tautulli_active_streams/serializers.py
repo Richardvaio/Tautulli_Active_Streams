@@ -353,18 +353,34 @@ def serialize_stat_item(
 ) -> dict[str, Any]:
     """Serialize one aggregate home-stat row without overclaiming media IDs."""
     show_user = entry.options.get(CONF_CARD_SHOW_USER_NAMES, True)
-    display_title = (
-        _text(item.get("title"))
-        or _text(item.get("friendly_name"))
-        or _text(item.get("user"))
-        or _text(item.get("section_name"))
-        or _text(item.get("library_name"))
-        or _text(item.get("platform"))
-        or _text(item.get("player"))
-    )
-    if kind == "top_users" and not show_user:
-        display_title = "Private user"
-    media_source = item if item.get("title") else {**item, "title": display_title}
+    if kind == "top_users":
+        display_title = (
+            _text(item.get("friendly_name"))
+            or _text(item.get("user"))
+            or _text(item.get("username"))
+            or "Unknown"
+        )
+        if not show_user:
+            display_title = "Private user"
+        # Tautulli includes the user's last-played media metadata in top_users.
+        # Do not let that title, identifier, hierarchy, or artwork masquerade as
+        # the ranked user in the normalized card API.
+        media_source = {
+            "media_type": "user",
+            "title": display_title,
+            "full_title": display_title,
+        }
+    else:
+        display_title = (
+            _text(item.get("title"))
+            or _text(item.get("friendly_name"))
+            or _text(item.get("user"))
+            or _text(item.get("section_name"))
+            or _text(item.get("library_name"))
+            or _text(item.get("platform"))
+            or _text(item.get("player"))
+        )
+        media_source = item if item.get("title") else {**item, "title": display_title}
     return {
         "rank": rank,
         "kind": kind,
@@ -381,7 +397,9 @@ def serialize_stat_item(
                 or item.get("total_users")
             ),
         ),
-        "last_played_at": _timestamp(item.get("last_watch") or item.get("last_played")),
+        "last_played_at": _timestamp(
+            item.get("last_watch") or item.get("last_played") or item.get("last_play")
+        ),
         "media": serialize_media_item(hass, entry, media_source),
     }
 
@@ -395,7 +413,11 @@ def serialize_user_stats(entry: ConfigEntry, stats: dict[str, Any]) -> dict[str,
     return {
         "id": f"{server_id}:{user_id}" if user_id else None,
         "user_id": user_id,
-        "display_name": _text(stats.get("username")) if show_user else None,
+        "display_name": (
+            _text(stats.get("friendly_name")) or _text(stats.get("username"))
+        )
+        if show_user
+        else None,
         "total_plays": max(0, _integer(stats.get("total_plays"))),
         "total_duration_seconds": max(
             0, _integer(stats.get("total_play_duration_sec"))
